@@ -1,0 +1,98 @@
+// ─────────────────────────────────────────────────────────────
+//  car-frontend — CD Pipeline
+//
+//  Two separate CD jobs needed:
+//    car-frontend-cd-staging   → triggered by develop branch CI
+//    car-frontend-cd-prod      → triggered by main branch CI
+//
+//  Stage 1 — Deploy to EKS
+// ─────────────────────────────────────────────────────────────
+
+pipeline {
+
+    agent any
+
+    parameters {
+        string(
+            name        : 'IMAGE_URI',
+            defaultValue: '',
+            description : 'ECR image URI passed from CI pipeline'
+        )
+        choice(
+            name        : 'ENVIRONMENT',
+            choices     : ['staging', 'production'],
+            description : 'Target environment — set automatically by CI trigger'
+        )
+    }
+
+    environment {
+        AWS_REGION    = 'ap-south-1'          // ✅ your AWS region
+        EKS_CLUSTER   = 'autoelite-cluster'   // ✅ your EKS cluster name
+        IMAGE_URI     = "${params.IMAGE_URI}"
+        K8S_NAMESPACE = "${params.ENVIRONMENT == 'production' ? 'autoelite' : 'autoelite-staging'}"
+    }
+
+    options {
+        timestamps()
+        timeout(time: 15, unit: 'MINUTES')
+        buildDiscarder(logRotator(numToKeepStr: '10'))
+        disableConcurrentBuilds()
+    }
+
+    stages {
+
+        stage('Stage 1 | Deploy to EKS') {
+            steps {
+                echo "🚀 Deploying to ${params.ENVIRONMENT} — image: ${IMAGE_URI}"
+                withCredentials([[
+                    $class       : 'AmazonWebServicesCredentialsBinding',
+                    credentialsId: 'aws-credentials'
+                ]]) {
+                    sh '''
+                        aws eks update-kubeconfig \
+                            --name ${EKS_CLUSTER} \
+                            --region ${AWS_REGION}
+
+                        kubectl set image deployment/car-frontend \
+                            car-frontend=${IMAGE_URI} \
+                            -n ${K8S_NAMESPACE}
+
+                        kubectl rollout status deployment/car-frontend \
+                            -n ${K8S_NAMESPACE} \
+                            --timeout=120s
+
+                        echo "✅ Deployed to ${K8S_NAMESPACE}"
+                        kubectl get pods -n ${K8S_NAMESPACE} -l app=car-frontend
+                    '''
+                }
+            }
+        }
+
+    }
+
+    post {
+        success {
+            echo "✅ CD complete — ${IMAGE_URI} live in ${params.ENVIRONMENT}"
+        }
+        failure {
+            echo "❌ Deploy to ${params.ENVIRONMENT} failed — rolling back..."
+            withCredentials([[
+                $class       : 'AmazonWebServicesCredentialsBinding',
+                credentialsId: 'aws-credentials'
+            ]]) {
+                sh '''
+                    aws eks update-kubeconfig \
+                        --name ${EKS_CLUSTER} \
+                        --region ${AWS_REGION} || true
+                    kubectl rollout undo deployment/car-frontend \
+                        -n ${K8S_NAMESPACE} || true
+                    echo "✅ Rolled back"
+                '''
+            }
+        }
+        always {
+            cleanWs()
+        }
+    }
+
+}

@@ -1,0 +1,11 @@
+# Production namespace
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: autoelite
+---
+# Staging namespace
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: autoelite-staging
