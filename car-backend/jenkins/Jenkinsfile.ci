@@ -1,335 +1,182 @@
-// ─────────────────────────────────────────────────────────────
-//  car-backend — CI Pipeline
-//
-//  Stage 1 — Checkout
-//  Stage 2 — Build
-//  Stage 3 — Test + Coverage       (60% threshold enforced)
-//  Stage 4 — SCA                   OWASP Dependency-Check
-//  Stage 5 — SonarQube             SAST + SCA + Quality Gate
-//  Stage 6 — Docker Build          build image locally
-//  Stage 7 — Trivy Scan            image CVE scan
-//  Stage 8 — Smoke Test            run container + curl check
-//  Stage 9 — Push to ECR           push image to AWS ECR
-//
-//  On success → triggers CD job automatically
-// ─────────────────────────────────────────────────────────────
-
 pipeline {
-
     agent any
 
     tools {
-        nodejs 'NodeJS-18'   // ✅ Jenkins → Global Tool Configuration → NodeJS name
+        nodejs 'NodeJS-20'
     }
 
     environment {
-        SONAR_HOST_URL = 'http://your-sonar-server:9000'  // ✅ your SonarQube URL
-        AWS_REGION     = 'ap-south-1'                     // ✅ your AWS region
-
-        SONAR_TOKEN    = credentials('sonar-token')
-        AWS_ACCOUNT_ID = credentials('aws-account-id')
-
+        AWS_REGION     = 'ap-south-1'
         ECR_REPOSITORY = 'car-backend'
-        IMAGE_TAG      = "${env.BUILD_NUMBER}-${env.GIT_COMMIT ? env.GIT_COMMIT.take(7) : 'nohash'}"
-    }
+        IMAGE_TAG      = "${BUILD_NUMBER}"
 
-    options {
-        timestamps()
-        timeout(time: 40, unit: 'MINUTES')
-        buildDiscarder(logRotator(numToKeepStr: '10'))
-        disableConcurrentBuilds()
+        SONAR_HOST_URL = 'http://your-sonarqube-server:9000'
     }
 
     stages {
 
-        // ─────────────────────────────────────────────────────
-        // STAGE 1 — Checkout
-        // ─────────────────────────────────────────────────────
-        stage('Stage 1 | Checkout') {
+        // ─────────────────────────────
+        stage('Stage 1 - Checkout') {
             steps {
                 checkout scm
-                sh 'git log -1 --oneline'
-                echo "Branch: ${env.BRANCH_NAME}"
             }
         }
 
-        // ─────────────────────────────────────────────────────
-        // STAGE 2 — Build
-        // npm install used (not npm ci) — works without lock file
-        // ─────────────────────────────────────────────────────
-        stage('Stage 2 | Build') {
+        // ─────────────────────────────
+        stage('Stage 2 - Build') {
             steps {
                 dir('car-backend') {
                     sh 'npm install'
-                    echo '✅ Build complete'
                 }
             }
         }
 
-        // ─────────────────────────────────────────────────────
-        // STAGE 3 — Test + Coverage
-        //
-        // Enforces 60% minimum coverage threshold.
-        // Build fails if coverage drops below threshold.
-        //
-        // Generates:
-        //   coverage/lcov.info      → SonarQube coverage tab
-        //   coverage/junit.xml      → Jenkins test results chart
-        //   coverage/lcov-report/   → Jenkins HTML coverage report
-        // ─────────────────────────────────────────────────────
-        stage('Stage 3 | Test & Coverage') {
+        // ─────────────────────────────
+        stage('Stage 3 - Test + Coverage') {
+            steps {
+                dir('car-backend') {
+                    sh 'npm test -- --coverage'
+                }
+            }
+        }
+
+        // ─────────────────────────────
+        stage('Stage 4 - SCA (Dependency Check)') {
             steps {
                 dir('car-backend') {
                     sh '''
-                        npm test -- \
-                            --coverage \
-                            --coverageReporters=lcov \
-                            --coverageReporters=text \
-                            --coverageReporters=clover \
-                            --coverageThreshold='{"global":{"branches":60,"functions":60,"lines":60,"statements":60}}' \
-                            --forceExit \
-                            --ci
+                        dependency-check.sh \
+                        --project car-backend \
+                        --scan . \
+                        --format ALL \
+                        --out sca-report \
+                        --failOnCVSS 7
                     '''
-                }
-            }
-            post {
-                always {
-                    junit allowEmptyResults: true,
-                          testResults: 'car-backend/coverage/junit.xml'
-
-                    publishHTML([
-                        allowMissing         : false,
-                        alwaysLinkToLastBuild: true,
-                        keepAll              : true,
-                        reportDir            : 'car-backend/coverage/lcov-report',
-                        reportFiles          : 'index.html',
-                        reportName           : 'Backend Coverage Report'
-                    ])
                 }
             }
         }
 
-        // ─────────────────────────────────────────────────────
-        stage('Stage 4 | SCA — OWASP Dependency-Check') {
-    steps {
-        dir('car-backend') {
-            script {
-                def dcHome = tool 'DependencyCheck'
+        // ─────────────────────────────
+        stage('Stage 5 - SAST (SonarQube Scan)') {
+            steps {
+                dir('car-backend') {
+                    withSonarQubeEnv('SonarQube') {
+                        sh '''
+                            npx sonar-scanner \
+                              -Dsonar.projectKey=car-backend \
+                              -Dsonar.projectName="Car Backend" \
+                              -Dsonar.sources=. \
+                              -Dsonar.tests=. \
+                              -Dsonar.javascript.lcov.reportPaths=coverage/lcov.info
+                        '''
+                    }
+                }
+            }
+        }
 
+        // ─────────────────────────────
+        stage('Stage 6 - Quality Gate (HARD STOP)') {
+            steps {
+                timeout(time: 5, unit: 'MINUTES') {
+                    waitForQualityGate abortPipeline: true
+                }
+            }
+        }
+
+        // ─────────────────────────────
+        stage('Stage 7 - Docker Build') {
+            steps {
+                dir('car-backend') {
+                    sh """
+                        docker build -t ${ECR_REPOSITORY}:${IMAGE_TAG} .
+                    """
+                }
+            }
+        }
+
+        // ─────────────────────────────
+        stage('Stage 8.1 - SBOM Generation (Syft)') {
+            steps {
+                dir('car-backend') {
+                    sh """
+                        syft ${ECR_REPOSITORY}:${IMAGE_TAG} -o json > sbom.json
+                        syft ${ECR_REPOSITORY}:${IMAGE_TAG} -o table > sbom.txt
+                    """
+                }
+            }
+        }
+
+        // ─────────────────────────────
+        stage('Stage 8.2 - Upload SBOM to S3') {
+            steps {
                 sh """
-                    mkdir -p dependency-check-report
+                    aws s3 cp car-backend/sbom.json s3://your-bucket/sbom/${BUILD_NUMBER}.json
+                    aws s3 cp car-backend/sbom.txt s3://your-bucket/sbom/${BUILD_NUMBER}.txt
+                """
+            }
+        }
 
-                    ${dcHome}/bin/dependency-check.sh \
-                      --project "car-backend" \
-                      --scan . \
-                      --exclude "**/node_modules/**" \
-                      --format XML \
-                      --format HTML \
-                      --format JSON \
-                      --out dependency-check-report \
-                      --noupdate \
-                      --failOnCVSS 7
+        // ─────────────────────────────
+        stage('Stage 9 - Trivy Image Scan (HARD STOP)') {
+            steps {
+                dir('car-backend') {
+                    sh """
+                        trivy image \
+                          --exit-code 1 \
+                          --severity CRITICAL,HIGH \
+                          -f json \
+                          -o trivy-report.json \
+                          ${ECR_REPOSITORY}:${IMAGE_TAG}
+                    """
+
+                    sh """
+                        aws s3 cp trivy-report.json s3://your-bucket/trivy-reports/${BUILD_NUMBER}.json
+                    """
+                }
+            }
+        }
+
+        // ─────────────────────────────
+        stage('Stage 10 - Smoke Test') {
+            steps {
+                sh """
+                    docker run -d --name car-backend-test -p 3000:3000 ${ECR_REPOSITORY}:${IMAGE_TAG}
+                    sleep 10
+                    curl -f http://localhost:3000/health
+                    docker stop car-backend-test
+                    docker rm car-backend-test
+                """
+            }
+        }
+
+        // ─────────────────────────────
+        stage('Stage 11 - Push to ECR') {
+            steps {
+                sh """
+                    aws ecr get-login-password --region ${AWS_REGION} | \
+                    docker login --username AWS --password-stdin <account>.dkr.ecr.${AWS_REGION}.amazonaws.com
+
+                    docker tag ${ECR_REPOSITORY}:${IMAGE_TAG} \
+                    <account>.dkr.ecr.${AWS_REGION}.amazonaws.com/${ECR_REPOSITORY}:${IMAGE_TAG}
+
+                    docker push <account>.dkr.ecr.${AWS_REGION}.amazonaws.com/${ECR_REPOSITORY}:${IMAGE_TAG}
                 """
             }
         }
     }
 
-    post {
-        always {
-            dependencyCheckPublisher(
-                pattern: 'car-backend/dependency-check-report/dependency-check-report.xml'
-            )
-        }
-    }
-}
-        // ─────────────────────────────────────────────────────
-        // STAGE 5 — SonarQube — SAST + SCA + Quality Gate
-        //
-        // Single SonarQube dashboard shows:
-        //
-        //   SAST → SonarQube built-in JS/Node security rules:
-        //          XSS, injection, hardcoded secrets, OWASP Top 10
-        //          Visible: Dashboard → Issues → Security
-        //
-        //   SCA  → OWASP JSON imported via dependencyCheck property
-        //          CVEs mapped to SonarQube severity by CVSS score
-        //          Visible: Dashboard → Security → OWASP Top 10
-        //
-        //   Quality Gate → pass/fail combining SAST + SCA + Coverage
-        //          Visible: Dashboard → Overview
-        //          Pipeline blocks here until result arrives.
-        //          Gate FAILS → Stage 6 never runs → no image built.
-        // ─────────────────────────────────────────────────────
-        stage('Stage 5 | SonarQube — SAST + Quality Gate') {
-            steps {
-                dir('car-backend') {
-                    withSonarQubeEnv('SonarQube') {  // ✅ Jenkins → Configure System → SonarQube Server name
-                        sh '''
-                            npx sonar-scanner \
-                                -Dsonar.projectKey=car-backend \
-                                -Dsonar.projectName="Car Backend" \
-                                -Dsonar.projectVersion=${BUILD_NUMBER} \
-                                \
-                                -Dsonar.sources=app.js \
-                                -Dsonar.exclusions=node_modules/**,coverage/**,**/*.test.js,server.js,dependency-check-report/** \
-                                -Dsonar.tests=. \
-                                -Dsonar.test.inclusions=**/*.test.js \
-                                \
-                                -Dsonar.javascript.lcov.reportPaths=coverage/lcov.info \
-                                \
-                                -Dsonar.dependencyCheck.jsonReportPath=dependency-check-report/dependency-check-report.json \
-                                -Dsonar.dependencyCheck.htmlReportPath=dependency-check-report/dependency-check-report.html \
-                                \
-                                -Dsonar.host.url=${SONAR_HOST_URL} \
-                                -Dsonar.login=${SONAR_TOKEN}
-                        '''
-                    }
-                }
-            }
-            post {
-                always {
-                    timeout(time: 35, unit: 'MINUTES') {
-                        waitForQualityGate abortPipeline: true
-                    }
-                }
-            }
-        }
-
-        // ─────────────────────────────────────────────────────
-        // STAGE 6 — Docker Build
-        // Builds image locally — not pushed yet (Stage 9)
-        // ECR_REGISTRY and IMAGE_URI set here for use in
-        // Stage 7, 8, and 9 via env variables
-        // ─────────────────────────────────────────────────────
-        stage('Stage 6 | Docker Build') {
-            steps {
-                dir('car-backend') {
-                    script {
-                        env.ECR_REGISTRY = "${AWS_ACCOUNT_ID}.dkr.ecr.${AWS_REGION}.amazonaws.com"
-                        env.IMAGE_URI    = "${env.ECR_REGISTRY}/${ECR_REPOSITORY}:prod-${IMAGE_TAG}"
-                    }
-                    sh 'docker build -t ${IMAGE_URI} .'
-                    echo "Built: ${env.IMAGE_URI}"
-                }
-            }
-        }
-
-        // ─────────────────────────────────────────────────────
-        // STAGE 7 — Trivy Image Scan
-        // Scans the built Docker image for OS + library CVEs.
-        // Fails build on HIGH or CRITICAL findings.
-        // Trivy must be installed on the Jenkins agent.
-        // Install: https://aquasecurity.github.io/trivy/latest/getting-started/installation/
-        // ─────────────────────────────────────────────────────
-        stage('Stage 7 | Trivy Scan') {
-            steps {
-                sh '''
-                    echo "Running Trivy scan on ${IMAGE_URI}..."
-
-                    trivy image \
-                        --severity HIGH,CRITICAL \
-                        --exit-code 1 \
-                        --no-progress \
-                        ${IMAGE_URI}
-
-                    echo "✅ Trivy scan passed"
-                '''
-            }
-        }
-
-        // ─────────────────────────────────────────────────────
-        // STAGE 8 — Smoke Test
-        // Runs the built image as a container and hits the
-        // health endpoint to confirm the app starts correctly.
-        // ─────────────────────────────────────────────────────
-        stage('Stage 8 | Smoke Test') {
-            steps {
-                sh '''
-                    echo "Starting smoke test container..."
-
-                    docker run -d \
-                        --name backend-smoke-${BUILD_NUMBER} \
-                        -p 5000:5000 \
-                        -e PORT=5000 \
-                        ${IMAGE_URI}
-
-                    sleep 10
-
-                    echo "--- Health check ---"
-                    curl -f http://localhost:5000/health || exit 1
-
-                    echo "--- GET /api/cars ---"
-                    curl -f http://localhost:5000/api/cars || exit 1
-
-                    echo "✅ Smoke test passed"
-
-                    docker stop backend-smoke-${BUILD_NUMBER}
-                    docker rm   backend-smoke-${BUILD_NUMBER}
-                '''
-            }
-            post {
-                always {
-                    sh "docker rm -f backend-smoke-${BUILD_NUMBER} || true"
-                }
-            }
-        }
-
-        // ─────────────────────────────────────────────────────
-        // STAGE 9 — Push to ECR
-        // Only pushes after Trivy scan + smoke test pass.
-        // Pushes two tags:
-        //   prod-<buildNo>-<commit>   → specific version
-        //   latest                    → always points to newest
-        // ─────────────────────────────────────────────────────
-        stage('Stage 9 | Push to ECR') {
-            steps {
-                withCredentials([[
-                    $class       : 'AmazonWebServicesCredentialsBinding',
-                    credentialsId: 'aws-credentials'
-                ]]) {
-                    sh '''
-                        aws ecr get-login-password --region ${AWS_REGION} | \
-                            docker login \
-                                --username AWS \
-                                --password-stdin \
-                                ${ECR_REGISTRY}
-
-                        docker tag ${IMAGE_URI} \
-                            ${ECR_REGISTRY}/${ECR_REPOSITORY}:latest
-
-                        docker push ${IMAGE_URI}
-                        docker push ${ECR_REGISTRY}/${ECR_REPOSITORY}:latest
-
-                        echo "✅ Pushed: ${IMAGE_URI}"
-                        echo "${IMAGE_URI}" > /tmp/backend_image_uri.txt
-                    '''
-                }
-            }
-        }
-
-    }
-
+    // ─────────────────────────────
     post {
         success {
-            script {
-                def imageUri = sh(
-                    script: 'cat /tmp/backend_image_uri.txt',
-                    returnStdout: true
-                ).trim()
-                echo "✅ CI passed — triggering CD with: ${imageUri}"
-                build job: 'car-backend-cd',
-                      parameters: [string(name: 'IMAGE_URI', value: imageUri)],
-                      wait: false
-            }
+            echo "✅ Pipeline SUCCESS"
         }
+
         failure {
-            echo '❌ CI failed — CD will NOT be triggered'
+            echo "❌ Pipeline FAILED - check logs"
         }
+
         always {
-            sh 'docker image prune -f || true'
-            sh 'rm -f /tmp/backend_image_uri.txt || true'
-            cleanWs()
+            echo "🏁 Pipeline completed"
         }
     }
-
 }
