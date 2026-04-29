@@ -145,18 +145,22 @@ pipeline {
                     sh '''
                         mkdir -p dependency-check-report
 
-                        # Auto-install OWASP Dependency-Check if not present
-                        if [ ! -f /opt/dependency-check/bin/dependency-check.sh ]; then
-                            echo "Installing OWASP Dependency-Check..."
+                        # Auto-install OWASP Dependency-Check into Jenkins home (no sudo needed)
+                        DC_INSTALL_DIR="${HOME}/dependency-check"
+                        DC_BIN="${DC_INSTALL_DIR}/bin/dependency-check.sh"
+
+                        if [ ! -f "${DC_BIN}" ]; then
+                            echo "Installing OWASP Dependency-Check into ${DC_INSTALL_DIR}..."
                             DC_VERSION="9.0.9"
-                            wget -q https://github.com/jeremylong/DependencyCheck/releases/download/v${DC_VERSION}/dependency-check-${DC_VERSION}-release.zip                                 -O /tmp/dependency-check.zip
-                            sudo unzip -q /tmp/dependency-check.zip -d /opt/
-                            sudo chmod +x /opt/dependency-check/bin/dependency-check.sh
+                            wget -q https://github.com/jeremylong/DependencyCheck/releases/download/v${DC_VERSION}/dependency-check-${DC_VERSION}-release.zip \
+                                -O /tmp/dependency-check.zip
+                            unzip -q /tmp/dependency-check.zip -d ${HOME}/
+                            chmod +x ${DC_BIN}
                             rm -f /tmp/dependency-check.zip
-                            echo "OWASP Dependency-Check installed"
+                            echo "OWASP Dependency-Check installed at ${DC_BIN}"
                         fi
 
-                        /opt/dependency-check/bin/dependency-check.sh \
+                        "${DC_BIN}" \
                             --project "car-frontend" \
                             --scan . \
                             --exclude "**/node_modules/**" \
