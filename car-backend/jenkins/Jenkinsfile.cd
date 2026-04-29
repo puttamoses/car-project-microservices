@@ -5,60 +5,45 @@ pipeline {
     parameters {
         string(
             name: 'IMAGE_URI',
-            defaultValue: '',
-            description: 'Full ECR image URI from CI pipeline'
-        )
-
-        string(
-            name: 'GIT_BRANCH',
-            defaultValue: 'main',
-            description: 'GitOps repo branch'
+            description: 'ECR image URI for backend'
         )
     }
 
     environment {
-        GIT_REPO     = 'git@github.com:your-org/car-backend-k8s.git'
-        GIT_DIR      = 'car-backend-k8s'
-        DEPLOY_FILE  = 'k8s/deployment.yaml'
-        IMAGE_URI    = "${params.IMAGE_URI}"
-    }
-
-    options {
-        timestamps()
-        timeout(time: 10, unit: 'MINUTES')
-        disableConcurrentBuilds()
+        GIT_REPO    = 'git@github.com:your-org/autoelite.git'
+        BRANCH      = 'main'
+        DEPLOY_FILE = 'k8s/backend-deployment.yaml'
+        IMAGE_URI   = "${params.IMAGE_URI}"
+        GIT_DIR     = 'autoelite'
     }
 
     stages {
 
-        // ─────────────────────────────
         stage('Checkout GitOps Repo') {
             steps {
                 sh '''
                     rm -rf ${GIT_DIR}
-                    git clone ${GIT_REPO}
+                    git clone -b ${BRANCH} ${GIT_REPO}
                 '''
             }
         }
 
-        // ─────────────────────────────
-        stage('Update Kubernetes Manifest') {
+        stage('Update Backend Image') {
             steps {
                 dir("${GIT_DIR}") {
                     sh '''
-                        echo "🔄 Updating image in deployment.yaml"
+                        echo "🔄 Updating backend image"
 
-                        sed -i "s|image: .*|image: ${IMAGE_URI}|g" ${DEPLOY_FILE}
+                        sed -i "s|image: .*backend.*|image: ${IMAGE_URI}|g" ${DEPLOY_FILE}
 
-                        echo "✅ Updated file:"
+                        echo "✅ Updated backend deployment:"
                         cat ${DEPLOY_FILE}
                     '''
                 }
             }
         }
 
-        // ─────────────────────────────
-        stage('Commit Changes to GitHub') {
+        stage('Commit & Push') {
             steps {
                 dir("${GIT_DIR}") {
                     withCredentials([usernamePassword(
@@ -67,40 +52,26 @@ pipeline {
                         passwordVariable: 'GIT_PASS'
                     )]) {
                         sh '''
-                            git config user.email "ci@pipeline.com"
+                            git config user.email "ci@autoelite.com"
                             git config user.name "jenkins-ci"
 
                             git add .
-                            git commit -m "🚀 Update image to ${IMAGE_URI}" || echo "No changes to commit"
+                            git commit -m "🚀 Backend image update: ${IMAGE_URI}" || echo "No changes"
 
-                            git push https://${GIT_USER}:${GIT_PASS}@github.com/your-org/car-backend-k8s.git ${GIT_BRANCH}
+                            git push https://${GIT_USER}:${GIT_PASS}@github.com/your-org/autoelite.git ${BRANCH}
                         '''
                     }
                 }
             }
         }
-
-        // ─────────────────────────────
-        stage('Verify Push') {
-            steps {
-                echo "📦 Image updated in GitOps repo"
-                echo "⏳ ArgoCD will auto-sync to EKS"
-            }
-        }
     }
 
     post {
-
         success {
-            echo "✅ GitOps CD completed — ArgoCD will handle deployment"
+            echo "✅ Backend CD done — ArgoCD will sync automatically"
         }
-
         failure {
-            echo "❌ GitOps update failed — check repo push"
-        }
-
-        always {
-            cleanWs()
+            echo "❌ Backend CD failed"
         }
     }
 }
