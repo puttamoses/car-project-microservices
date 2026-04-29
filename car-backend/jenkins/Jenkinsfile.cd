@@ -1,12 +1,8 @@
 // ─────────────────────────────────────────────────────────────
 //  car-backend — CD Pipeline
 //
-//  Two separate CD jobs needed:
-//    car-backend-cd-staging   → triggered by develop branch CI
-//    car-backend-cd-prod      → triggered by main branch CI
-//
-//  This single Jenkinsfile handles both.
-//  The ENVIRONMENT parameter controls which EKS namespace is used.
+//  Triggered by: CI pipeline post { success }
+//  Input:        IMAGE_URI parameter from CI
 //
 //  Stage 1 — Deploy to EKS
 // ─────────────────────────────────────────────────────────────
@@ -19,23 +15,15 @@ pipeline {
         string(
             name        : 'IMAGE_URI',
             defaultValue: '',
-            description : 'ECR image URI passed from CI pipeline'
-        )
-        choice(
-            name        : 'ENVIRONMENT',
-            choices     : ['staging', 'production'],
-            description : 'Target environment — set automatically by CI trigger'
+            description : 'Full ECR image URI passed from CI pipeline'
         )
     }
 
     environment {
-        AWS_REGION  = 'ap-south-1'          // ✅ your AWS region
-        EKS_CLUSTER = 'autoelite-cluster'   // ✅ your EKS cluster name
-        IMAGE_URI   = "${params.IMAGE_URI}"
-        // K8s namespace matches environment name
-        // staging    → namespace: autoelite-staging
-        // production → namespace: autoelite
-        K8S_NAMESPACE = "${params.ENVIRONMENT == 'production' ? 'autoelite' : 'autoelite-staging'}"
+        AWS_REGION    = 'ap-south-1'         // ✅ your AWS region
+        EKS_CLUSTER   = 'autoelite-cluster'  // ✅ your EKS cluster name
+        K8S_NAMESPACE = 'autoelite'
+        IMAGE_URI     = "${params.IMAGE_URI}"
     }
 
     options {
@@ -49,7 +37,7 @@ pipeline {
 
         stage('Stage 1 | Deploy to EKS') {
             steps {
-                echo "🚀 Deploying to ${params.ENVIRONMENT} — image: ${IMAGE_URI}"
+                echo "🚀 Deploying ${IMAGE_URI} to EKS namespace: ${K8S_NAMESPACE}"
                 withCredentials([[
                     $class       : 'AmazonWebServicesCredentialsBinding',
                     credentialsId: 'aws-credentials'
@@ -59,17 +47,15 @@ pipeline {
                             --name ${EKS_CLUSTER} \
                             --region ${AWS_REGION}
 
-                        # Rolling update — zero downtime
                         kubectl set image deployment/car-backend \
                             car-backend=${IMAGE_URI} \
                             -n ${K8S_NAMESPACE}
 
-                        # Wait for all pods to be healthy
                         kubectl rollout status deployment/car-backend \
                             -n ${K8S_NAMESPACE} \
                             --timeout=120s
 
-                        echo "✅ Deployed to ${K8S_NAMESPACE}"
+                        echo "✅ Deployment complete"
                         kubectl get pods -n ${K8S_NAMESPACE} -l app=car-backend
                     '''
                 }
@@ -80,10 +66,10 @@ pipeline {
 
     post {
         success {
-            echo "✅ CD complete — ${IMAGE_URI} live in ${params.ENVIRONMENT}"
+            echo "✅ CD complete — ${IMAGE_URI} is live"
         }
         failure {
-            echo "❌ Deploy to ${params.ENVIRONMENT} failed — rolling back..."
+            echo '❌ Deploy failed — rolling back...'
             withCredentials([[
                 $class       : 'AmazonWebServicesCredentialsBinding',
                 credentialsId: 'aws-credentials'

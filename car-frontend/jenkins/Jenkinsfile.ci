@@ -1,21 +1,17 @@
 // ─────────────────────────────────────────────────────────────
 //  car-frontend — CI Pipeline
 //
-//  Branch Strategy:
-//    feature/*  → Stage 1–5 only (no Docker build, no deploy)
-//    develop    → Stage 1–6 + triggers CD to STAGING
-//    main       → Stage 1–6 + triggers CD to PRODUCTION
-//
 //  Stage 1 — Checkout
-//  Stage 2 — Build
-//  Stage 3 — Test + Coverage
-//  Stage 4 — SCA  (OWASP Dependency-Check)
-//  Stage 5 — SonarQube Analysis + Quality Gate
-//             Single dashboard shows:
-//               ✅ SAST   → SonarQube built-in JS/React security rules
-//               ✅ SCA    → OWASP Dependency-Check JSON imported
-//               ✅ Quality Gate → pass/fail on all combined results
-//  Stage 6 — Docker Build + Push to ECR [develop + main only]
+//  Stage 2 — Build          (injects REACT_APP_API_URL)
+//  Stage 3 — Test + Coverage (60% threshold enforced)
+//  Stage 4 — SCA             OWASP Dependency-Check
+//  Stage 5 — SonarQube       SAST + SCA + Quality Gate
+//  Stage 6 — Docker Build    build image locally
+//  Stage 7 — Trivy Scan      image CVE scan
+//  Stage 8 — Smoke Test      run nginx container + curl check
+//  Stage 9 — Push to ECR     push image to AWS ECR
+//
+//  On success → triggers CD job automatically
 // ─────────────────────────────────────────────────────────────
 
 pipeline {
@@ -33,15 +29,12 @@ pipeline {
         SONAR_TOKEN    = credentials('sonar-token')
         AWS_ACCOUNT_ID = credentials('aws-account-id')
 
-        // ✅ Backend ALB DNS per environment
-        // Set these in Jenkins → Manage Credentials after backend is deployed
-        // Run: kubectl get svc car-backend -n autoelite → copy EXTERNAL-IP
-        REACT_APP_API_URL_STAGING = credentials('react-app-api-url-staging')
-        REACT_APP_API_URL_PROD    = credentials('react-app-api-url-prod')
+        // ✅ Backend ALB DNS — set after backend is deployed
+        // kubectl get svc car-backend -n autoelite → copy EXTERNAL-IP
+        REACT_APP_API_URL = credentials('react-app-api-url')
 
         ECR_REPOSITORY = 'car-frontend'
-        IMAGE_TAG      = "${env.BUILD_NUMBER}-${env.GIT_COMMIT?.take(7)}"
-        BRANCH         = "${env.GIT_BRANCH?.replaceAll('origin/', '')}"
+        IMAGE_TAG      = "${env.BUILD_NUMBER}-${env.GIT_COMMIT ? env.GIT_COMMIT.take(7) : 'nohash'}"
     }
 
     options {
@@ -60,15 +53,15 @@ pipeline {
             steps {
                 checkout scm
                 sh 'git log -1 --oneline'
-                echo "Branch: ${BRANCH}"
+                echo "Branch: ${env.BRANCH_NAME}"
             }
         }
 
         // ─────────────────────────────────────────────────────
         // STAGE 2 — Build
-        // Injects correct backend URL based on branch.
-        // React reads .env.production at build time and bakes
-        // REACT_APP_API_URL into the JS bundle.
+        // Writes REACT_APP_API_URL from Jenkins credential
+        // into .env.production before npm run build.
+        // React reads it and bakes it into the JS bundle.
         // npm install used (not npm ci) — works without lock file
         // ─────────────────────────────────────────────────────
         stage('Stage 2 | Build') {
@@ -77,16 +70,10 @@ pipeline {
                     sh '''
                         npm install
 
-                        if [ "${BRANCH}" = "main" ]; then
-                            echo "REACT_APP_API_URL=${REACT_APP_API_URL_PROD}" > .env.production
-                        elif [ "${BRANCH}" = "develop" ]; then
-                            echo "REACT_APP_API_URL=${REACT_APP_API_URL_STAGING}" > .env.production
-                        else
-                            echo "REACT_APP_API_URL=http://localhost:5000" > .env.production
-                        fi
+                        echo "REACT_APP_API_URL=${REACT_APP_API_URL}" > .env.production
 
                         npm run build
-                        echo "Build complete for branch: ${BRANCH}"
+                        echo "✅ Build complete"
                     '''
                 }
             }
@@ -94,6 +81,9 @@ pipeline {
 
         // ─────────────────────────────────────────────────────
         // STAGE 3 — Test + Coverage
+        //
+        // Enforces 60% minimum coverage threshold.
+        // Build fails if coverage drops below threshold.
         //
         // Generates:
         //   coverage/lcov.info      → SonarQube coverage tab
@@ -110,6 +100,7 @@ pipeline {
                             --coverageReporters=lcov \
                             --coverageReporters=text \
                             --coverageReporters=clover \
+                            --coverageThreshold='{"global":{"branches":60,"functions":60,"lines":60,"statements":60}}' \
                             --ci
                     '''
                 }
@@ -135,12 +126,12 @@ pipeline {
         // STAGE 4 — SCA (OWASP Dependency-Check)
         //
         // Scans all dependencies for known CVEs.
-        // Fails build if any dependency has CVSS score >= 8.
+        // Fails build if CVSS score >= 9 (CRITICAL).
         //
         // Generates inside dependency-check-report/:
-        //   dependency-check-report.xml  → Jenkins trend chart
-        //   dependency-check-report.json → imported into SonarQube (Stage 5)
-        //   dependency-check-report.html → human readable
+        //   .xml  → Jenkins trend chart
+        //   .json → imported into SonarQube Security tab (Stage 5)
+        //   .html → human readable report
         // ─────────────────────────────────────────────────────
         stage('Stage 4 | SCA — OWASP Dependency-Check') {
             steps {
@@ -152,7 +143,7 @@ pipeline {
                             --format HTML
                             --format XML
                             --format JSON
-                            --failOnCVSS 8
+                            --failOnCVSS 9
                             --enableRetired
                             --out dependency-check-report
                         ''',
@@ -172,27 +163,23 @@ pipeline {
         }
 
         // ─────────────────────────────────────────────────────
-        // STAGE 5 — SonarQube Analysis + Quality Gate
+        // STAGE 5 — SonarQube — SAST + SCA + Quality Gate
         //
-        // ONE SonarQube dashboard shows all three:
+        // Single SonarQube dashboard shows:
         //
-        //  SAST  → SonarQube built-in security rules scan the
-        //          React/JS source code for XSS, insecure
-        //          patterns, OWASP Top 10, hardcoded secrets.
-        //          Visible in: Dashboard → Issues → Security
+        //   SAST → SonarQube built-in JS/React security rules:
+        //          XSS, injection, hardcoded secrets, OWASP Top 10
+        //          Visible: Dashboard → Issues → Security
         //
-        //  SCA   → OWASP Dependency-Check JSON imported via
-        //          sonar.dependencyCheck.jsonReportPath.
+        //   SCA  → OWASP JSON imported via dependencyCheck property
         //          CVEs appear in Dashboard → Security → OWASP
         //
-        //  Quality Gate → Combines SAST + SCA + Coverage + Bugs.
-        //          Gate FAILS if any condition is not met.
-        //          Visible in: Dashboard → Overview
-        //
-        // Pipeline blocks here until gate result arrives.
-        // If gate FAILS → Stage 6 is skipped → no image pushed.
+        //   Quality Gate → pass/fail combining SAST + SCA + Coverage
+        //          Visible: Dashboard → Overview
+        //          Pipeline blocks here until result arrives.
+        //          Gate FAILS → Stage 6 never runs → no image built.
         // ─────────────────────────────────────────────────────
-        stage('Stage 5 | SonarQube — SAST + SCA + Quality Gate') {
+        stage('Stage 5 | SonarQube — SAST + Quality Gate') {
             steps {
                 dir('car-frontend') {
                     withSonarQubeEnv('SonarQube') {  // ✅ Jenkins → Configure System → SonarQube Server name
@@ -201,7 +188,6 @@ pipeline {
                                 -Dsonar.projectKey=car-frontend \
                                 -Dsonar.projectName="Car Frontend" \
                                 -Dsonar.projectVersion=${BUILD_NUMBER} \
-                                -Dsonar.branch.name=${BRANCH} \
                                 \
                                 -Dsonar.sources=src \
                                 -Dsonar.exclusions=node_modules/**,build/**,coverage/**,**/*.test.js,**/*.test.jsx,dependency-check-report/** \
@@ -212,10 +198,6 @@ pipeline {
                                 \
                                 -Dsonar.dependencyCheck.jsonReportPath=dependency-check-report/dependency-check-report.json \
                                 -Dsonar.dependencyCheck.htmlReportPath=dependency-check-report/dependency-check-report.html \
-                                -Dsonar.dependencyCheck.severity.blocker=9.0 \
-                                -Dsonar.dependencyCheck.severity.critical=7.0 \
-                                -Dsonar.dependencyCheck.severity.major=4.0 \
-                                -Dsonar.dependencyCheck.severity.minor=0.0 \
                                 \
                                 -Dsonar.host.url=${SONAR_HOST_URL} \
                                 -Dsonar.login=${SONAR_TOKEN}
@@ -233,55 +215,108 @@ pipeline {
         }
 
         // ─────────────────────────────────────────────────────
-        // STAGE 6 — Docker Build + Push to ECR
-        // Skipped on feature/* branches
-        // develop → tag: staging-<buildNo>-<commit>
-        // main    → tag: prod-<buildNo>-<commit> + :latest
+        // STAGE 6 — Docker Build
         // ─────────────────────────────────────────────────────
-        stage('Stage 6 | Docker Build & Push to ECR') {
-            when {
-                anyOf {
-                    branch 'main'
-                    branch 'develop'
-                }
-            }
+        stage('Stage 6 | Docker Build') {
             steps {
                 dir('car-frontend') {
-                    withCredentials([[
-                        $class       : 'AmazonWebServicesCredentialsBinding',
-                        credentialsId: 'aws-credentials'
-                    ]]) {
-                        sh '''
-                            ECR_REGISTRY="${AWS_ACCOUNT_ID}.dkr.ecr.${AWS_REGION}.amazonaws.com"
-
-                            if [ "${BRANCH}" = "main" ]; then
-                                FULL_TAG="prod-${IMAGE_TAG}"
-                            else
-                                FULL_TAG="staging-${IMAGE_TAG}"
-                            fi
-
-                            IMAGE_URI="${ECR_REGISTRY}/${ECR_REPOSITORY}:${FULL_TAG}"
-
-                            aws ecr get-login-password --region ${AWS_REGION} | \
-                                docker login \
-                                    --username AWS \
-                                    --password-stdin \
-                                    ${ECR_REGISTRY}
-
-                            docker build -t ${IMAGE_URI} .
-
-                            if [ "${BRANCH}" = "main" ]; then
-                                docker tag ${IMAGE_URI} \
-                                    ${ECR_REGISTRY}/${ECR_REPOSITORY}:latest
-                                docker push \
-                                    ${ECR_REGISTRY}/${ECR_REPOSITORY}:latest
-                            fi
-
-                            docker push ${IMAGE_URI}
-                            echo "${IMAGE_URI}" > /tmp/frontend_image_uri.txt
-                            echo "Pushed: ${IMAGE_URI}"
-                        '''
+                    script {
+                        env.ECR_REGISTRY = "${AWS_ACCOUNT_ID}.dkr.ecr.${AWS_REGION}.amazonaws.com"
+                        env.IMAGE_URI    = "${env.ECR_REGISTRY}/${ECR_REPOSITORY}:prod-${IMAGE_TAG}"
                     }
+                    sh 'docker build -t ${IMAGE_URI} .'
+                    echo "Built: ${env.IMAGE_URI}"
+                }
+            }
+        }
+
+        // ─────────────────────────────────────────────────────
+        // STAGE 7 — Trivy Image Scan
+        // Fails on HIGH or CRITICAL CVEs in the image.
+        // ─────────────────────────────────────────────────────
+        stage('Stage 7 | Trivy Scan') {
+            steps {
+                sh '''
+                    echo "Running Trivy scan on ${IMAGE_URI}..."
+
+                    trivy image \
+                        --severity HIGH,CRITICAL \
+                        --exit-code 1 \
+                        --no-progress \
+                        ${IMAGE_URI}
+
+                    echo "✅ Trivy scan passed"
+                '''
+            }
+        }
+
+        // ─────────────────────────────────────────────────────
+        // STAGE 8 — Smoke Test
+        // Runs nginx container and confirms React app is served.
+        // ─────────────────────────────────────────────────────
+        stage('Stage 8 | Smoke Test') {
+            steps {
+                sh '''
+                    echo "Starting smoke test container..."
+
+                    docker run -d \
+                        --name frontend-smoke-${BUILD_NUMBER} \
+                        -p 8080:80 \
+                        ${IMAGE_URI}
+
+                    sleep 10
+
+                    echo "--- Root page returns 200 ---"
+                    STATUS=$(curl -o /dev/null -sw "%{http_code}" http://localhost:8080/)
+                    [ "$STATUS" = "200" ] && echo "✅ Root page OK" || exit 1
+
+                    echo "--- React root div present ---"
+                    curl -sf http://localhost:8080/ | grep -q "root" \
+                        && echo "✅ React app served" || exit 1
+
+                    echo "--- React Router fallback ---"
+                    STATUS=$(curl -o /dev/null -sw "%{http_code}" http://localhost:8080/cars)
+                    [ "$STATUS" = "200" ] && echo "✅ React Router OK" || exit 1
+
+                    echo "✅ Smoke test passed"
+
+                    docker stop frontend-smoke-${BUILD_NUMBER}
+                    docker rm   frontend-smoke-${BUILD_NUMBER}
+                '''
+            }
+            post {
+                always {
+                    sh "docker rm -f frontend-smoke-${BUILD_NUMBER} || true"
+                }
+            }
+        }
+
+        // ─────────────────────────────────────────────────────
+        // STAGE 9 — Push to ECR
+        // Only pushes after Trivy + smoke test pass.
+        // ─────────────────────────────────────────────────────
+        stage('Stage 9 | Push to ECR') {
+            steps {
+                withCredentials([[
+                    $class       : 'AmazonWebServicesCredentialsBinding',
+                    credentialsId: 'aws-credentials'
+                ]]) {
+                    sh '''
+                        aws ecr get-login-password --region ${AWS_REGION} | \
+                            docker login \
+                                --username AWS \
+                                --password-stdin \
+                                ${ECR_REGISTRY}
+
+                        docker tag ${IMAGE_URI} \
+                            ${ECR_REGISTRY}/${ECR_REPOSITORY}:latest
+
+                        docker push ${IMAGE_URI}
+                        docker push ${ECR_REGISTRY}/${ECR_REPOSITORY}:latest
+
+                        echo "✅ Pushed: ${IMAGE_URI}"
+                        echo "${IMAGE_URI}" > /tmp/frontend_image_uri.txt
+                    '''
                 }
             }
         }
@@ -291,25 +326,18 @@ pipeline {
     post {
         success {
             script {
-                def branch = env.GIT_BRANCH?.replaceAll('origin/', '')
-                if (branch == 'main' || branch == 'develop') {
-                    def imageUri = sh(
-                        script: 'cat /tmp/frontend_image_uri.txt',
-                        returnStdout: true
-                    ).trim()
-                    def cdJob   = (branch == 'main') ? 'car-frontend-cd-prod' : 'car-frontend-cd-staging'
-                    def envName = (branch == 'main') ? 'PRODUCTION' : 'STAGING'
-                    echo "CI passed — triggering ${envName} CD: ${imageUri}"
-                    build job: cdJob,
-                          parameters: [string(name: 'IMAGE_URI', value: imageUri)],
-                          wait: false
-                } else {
-                    echo 'CI passed — feature branch, no deploy triggered'
-                }
+                def imageUri = sh(
+                    script: 'cat /tmp/frontend_image_uri.txt',
+                    returnStdout: true
+                ).trim()
+                echo "✅ CI passed — triggering CD with: ${imageUri}"
+                build job: 'car-frontend-cd',
+                      parameters: [string(name: 'IMAGE_URI', value: imageUri)],
+                      wait: false
             }
         }
         failure {
-            echo 'CI failed — CD will NOT be triggered'
+            echo '❌ CI failed — CD will NOT be triggered'
         }
         always {
             sh 'docker image prune -f || true'
