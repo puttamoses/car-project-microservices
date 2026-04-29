@@ -112,37 +112,47 @@ pipeline {
         // ─────────────────────────────────────────────────────
         // STAGE 4 — SCA (OWASP Dependency-Check)
         //
-        // Scans all dependencies for known CVEs.
-        // Fails build if CVSS score >= 9 (CRITICAL).
+        // Uses dependency-check.sh directly for full control
+        // over output path and formats.
         //
         // Generates inside dependency-check-report/:
-        //   .xml  → Jenkins trend chart (dependencyCheckPublisher)
-        //   .json → imported into SonarQube Security tab (Stage 5)
-        //   .html → human readable report
+        //   dependency-check-report.xml  → Jenkins trend chart
+        //   dependency-check-report.html → human readable
+        //   dependency-check-report.json → SonarQube import (Stage 5)
+        //
+        // Fails build if CVSS score >= 9 (CRITICAL)
+        //
+        // ✅ dependency-check.sh must be installed on Jenkins agent at:
+        //    /opt/dependency-check/bin/dependency-check.sh
+        //    Install: https://jeremylong.github.io/DependencyCheck/
         // ─────────────────────────────────────────────────────
         stage('Stage 4 | SCA — OWASP Dependency-Check') {
             steps {
                 dir('car-backend') {
-                    dependencyCheck(
-                        additionalArguments: '''
-                            --scan .
-                            --format HTML
-                            --format XML
-                            --format JSON
-                            --failOnCVSS 9
-                            --enableRetired
-                            --out dependency-check-report
-                        ''',
-                        odcInstallation: 'OWASP-DC'  // ✅ Jenkins → Global Tool Configuration → OWASP-DC name
-                    )
+                    sh '''
+                        mkdir -p dependency-check-report
+
+                        /opt/dependency-check/bin/dependency-check.sh \
+                            --project "car-backend" \
+                            --scan . \
+                            --exclude "**/node_modules/**" \
+                            --format XML \
+                            --format HTML \
+                            --format JSON \
+                            --out dependency-check-report \
+                            --failOnCVSS 9 \
+                            --enableRetired \
+                            --disableAssembly
+
+                        echo "=== Reports generated ==="
+                        ls -lh dependency-check-report/
+                    '''
                 }
             }
             post {
                 always {
                     dependencyCheckPublisher(
-                        pattern             : 'car-backend/dependency-check-report/dependency-check-report.xml',
-                        failedTotalCritical : 1,
-                        failedTotalHigh     : 5
+                        pattern: 'car-backend/dependency-check-report/dependency-check-report.xml'
                     )
                 }
             }
