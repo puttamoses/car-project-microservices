@@ -145,6 +145,17 @@ pipeline {
                     sh '''
                         mkdir -p dependency-check-report
 
+                        # Auto-install OWASP Dependency-Check if not present
+                        if [ ! -f /opt/dependency-check/bin/dependency-check.sh ]; then
+                            echo "Installing OWASP Dependency-Check..."
+                            DC_VERSION="9.0.9"
+                            wget -q https://github.com/jeremylong/DependencyCheck/releases/download/v${DC_VERSION}/dependency-check-${DC_VERSION}-release.zip                                 -O /tmp/dependency-check.zip
+                            sudo unzip -q /tmp/dependency-check.zip -d /opt/
+                            sudo chmod +x /opt/dependency-check/bin/dependency-check.sh
+                            rm -f /tmp/dependency-check.zip
+                            echo "OWASP Dependency-Check installed"
+                        fi
+
                         /opt/dependency-check/bin/dependency-check.sh \
                             --project "car-frontend" \
                             --scan . \
