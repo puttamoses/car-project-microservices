@@ -110,47 +110,34 @@ pipeline {
         }
 
         // ─────────────────────────────────────────────────────
-        // STAGE 4 — SCA (OWASP Dependency-Check)
-        //
-        // Uses dependency-check.sh directly for full control
-        // over output path and formats.
-        //
-        // Generates inside dependency-check-report/:
-        //   dependency-check-report.xml  → Jenkins trend chart
-        //   dependency-check-report.html → human readable
-        //   dependency-check-report.json → SonarQube import (Stage 5)
-        //
-        // Fails build if CVSS score >= 9 (CRITICAL)
-        //
-        // ✅ dependency-check.sh must be installed on Jenkins agent at:
-        //    /opt/dependency-check/bin/dependency-check.sh
-        //    Install: https://jeremylong.github.io/DependencyCheck/
-        // ─────────────────────────────────────────────────────
         stage('Stage 4 | SCA — OWASP Dependency-Check') {
     steps {
         dir('car-backend') {
             script {
-                def dcHome = tool 'DependencyCheck'   // <-- name you gave in Jenkins
+                def dcHome = tool 'DependencyCheck'
 
-                sh """
-                    mkdir -p dependency-check-report
+                withCredentials([string(credentialsId: 'nvd-api-key', variable: 'NVD_KEY')]) {
+                    sh """
+                        mkdir -p dependency-check-report
 
-                    echo "Running OWASP Dependency-Check..."
+                        echo "Running OWASP Dependency-Check..."
 
-                    ${dcHome}/bin/dependency-check.sh \
-                      --project "car-backend" \
-                      --scan . \
-                      --exclude "**/node_modules/**" \
-                      --format XML \
-                      --format HTML \
-                      --format JSON \
-                      --out dependency-check-report \
-                      --enableRetired \
-                      --disableAssembly
+                        ${dcHome}/bin/dependency-check.sh \
+                          --project "car-backend" \
+                          --scan . \
+                          --exclude "**/node_modules/**" \
+                          --nvdApiKey $NVD_KEY \
+                          --format XML \
+                          --format HTML \
+                          --format JSON \
+                          --out dependency-check-report \
+                          --enableRetired \
+                          --disableAssembly
 
-                    echo "=== Reports generated ==="
-                    ls -lh dependency-check-report/
-                """
+                        echo "=== Reports generated ==="
+                        ls -lh dependency-check-report/
+                    """
+                }
             }
         }
     }
