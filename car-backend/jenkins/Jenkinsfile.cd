@@ -1,92 +1,106 @@
-// ─────────────────────────────────────────────────────────────
-//  car-backend — CD Pipeline
-//
-//  Triggered by: CI pipeline post { success }
-//  Input:        IMAGE_URI parameter from CI
-//
-//  Stage 1 — Deploy to EKS
-// ─────────────────────────────────────────────────────────────
-
 pipeline {
 
     agent any
 
     parameters {
         string(
-            name        : 'IMAGE_URI',
+            name: 'IMAGE_URI',
             defaultValue: '',
-            description : 'Full ECR image URI passed from CI pipeline'
+            description: 'Full ECR image URI from CI pipeline'
+        )
+
+        string(
+            name: 'GIT_BRANCH',
+            defaultValue: 'main',
+            description: 'GitOps repo branch'
         )
     }
 
     environment {
-        AWS_REGION    = 'ap-south-1'         // ✅ your AWS region
-        EKS_CLUSTER   = 'autoelite-cluster'  // ✅ your EKS cluster name
-        K8S_NAMESPACE = 'autoelite'
-        IMAGE_URI     = "${params.IMAGE_URI}"
+        GIT_REPO     = 'git@github.com:your-org/car-backend-k8s.git'
+        GIT_DIR      = 'car-backend-k8s'
+        DEPLOY_FILE  = 'k8s/deployment.yaml'
+        IMAGE_URI    = "${params.IMAGE_URI}"
     }
 
     options {
         timestamps()
-        timeout(time: 15, unit: 'MINUTES')
-        buildDiscarder(logRotator(numToKeepStr: '10'))
+        timeout(time: 10, unit: 'MINUTES')
         disableConcurrentBuilds()
     }
 
     stages {
 
-        stage('Stage 1 | Deploy to EKS') {
+        // ─────────────────────────────
+        stage('Checkout GitOps Repo') {
             steps {
-                echo "🚀 Deploying ${IMAGE_URI} to EKS namespace: ${K8S_NAMESPACE}"
-                withCredentials([[
-                    $class       : 'AmazonWebServicesCredentialsBinding',
-                    credentialsId: 'aws-credentials'
-                ]]) {
+                sh '''
+                    rm -rf ${GIT_DIR}
+                    git clone ${GIT_REPO}
+                '''
+            }
+        }
+
+        // ─────────────────────────────
+        stage('Update Kubernetes Manifest') {
+            steps {
+                dir("${GIT_DIR}") {
                     sh '''
-                        aws eks update-kubeconfig \
-                            --name ${EKS_CLUSTER} \
-                            --region ${AWS_REGION}
+                        echo "🔄 Updating image in deployment.yaml"
 
-                        kubectl set image deployment/car-backend \
-                            car-backend=${IMAGE_URI} \
-                            -n ${K8S_NAMESPACE}
+                        sed -i "s|image: .*|image: ${IMAGE_URI}|g" ${DEPLOY_FILE}
 
-                        kubectl rollout status deployment/car-backend \
-                            -n ${K8S_NAMESPACE} \
-                            --timeout=120s
-
-                        echo "✅ Deployment complete"
-                        kubectl get pods -n ${K8S_NAMESPACE} -l app=car-backend
+                        echo "✅ Updated file:"
+                        cat ${DEPLOY_FILE}
                     '''
                 }
             }
         }
 
+        // ─────────────────────────────
+        stage('Commit Changes to GitHub') {
+            steps {
+                dir("${GIT_DIR}") {
+                    withCredentials([usernamePassword(
+                        credentialsId: 'github-creds',
+                        usernameVariable: 'GIT_USER',
+                        passwordVariable: 'GIT_PASS'
+                    )]) {
+                        sh '''
+                            git config user.email "ci@pipeline.com"
+                            git config user.name "jenkins-ci"
+
+                            git add .
+                            git commit -m "🚀 Update image to ${IMAGE_URI}" || echo "No changes to commit"
+
+                            git push https://${GIT_USER}:${GIT_PASS}@github.com/your-org/car-backend-k8s.git ${GIT_BRANCH}
+                        '''
+                    }
+                }
+            }
+        }
+
+        // ─────────────────────────────
+        stage('Verify Push') {
+            steps {
+                echo "📦 Image updated in GitOps repo"
+                echo "⏳ ArgoCD will auto-sync to EKS"
+            }
+        }
     }
 
     post {
+
         success {
-            echo "✅ CD complete — ${IMAGE_URI} is live"
+            echo "✅ GitOps CD completed — ArgoCD will handle deployment"
         }
+
         failure {
-            echo '❌ Deploy failed — rolling back...'
-            withCredentials([[
-                $class       : 'AmazonWebServicesCredentialsBinding',
-                credentialsId: 'aws-credentials'
-            ]]) {
-                sh '''
-                    aws eks update-kubeconfig \
-                        --name ${EKS_CLUSTER} \
-                        --region ${AWS_REGION} || true
-                    kubectl rollout undo deployment/car-backend \
-                        -n ${K8S_NAMESPACE} || true
-                    echo "✅ Rolled back"
-                '''
-            }
+            echo "❌ GitOps update failed — check repo push"
         }
+
         always {
             cleanWs()
         }
     }
-
 }
