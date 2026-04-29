@@ -116,31 +116,24 @@ pipeline {
             script {
                 def dcHome = tool 'DependencyCheck'
 
-                withCredentials([string(credentialsId: 'nvd-api-key', variable: 'NVD_KEY')]) {
-                    sh """
-                        mkdir -p dependency-check-report
+                sh """
+                    mkdir -p dependency-check-report
 
-                        echo "Running OWASP Dependency-Check..."
-
-                        ${dcHome}/bin/dependency-check.sh \
-                          --project "car-backend" \
-                          --scan . \
-                          --exclude "**/node_modules/**" \
-                          --nvdApiKey $NVD_KEY \
-                          --format XML \
-                          --format HTML \
-                          --format JSON \
-                          --out dependency-check-report \
-                          --enableRetired \
-                          --disableAssembly
-
-                        echo "=== Reports generated ==="
-                        ls -lh dependency-check-report/
-                    """
-                }
+                    ${dcHome}/bin/dependency-check.sh \
+                      --project "car-backend" \
+                      --scan . \
+                      --exclude "**/node_modules/**" \
+                      --format XML \
+                      --format HTML \
+                      --format JSON \
+                      --out dependency-check-report \
+                      --noupdate \
+                      --failOnCVSS 7
+                """
             }
         }
     }
+
     post {
         always {
             dependencyCheckPublisher(
@@ -149,7 +142,6 @@ pipeline {
         }
     }
 }
-
         // ─────────────────────────────────────────────────────
         // STAGE 5 — SonarQube — SAST + SCA + Quality Gate
         //
