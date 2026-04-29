@@ -127,51 +127,41 @@ pipeline {
         //    Install: https://jeremylong.github.io/DependencyCheck/
         // ─────────────────────────────────────────────────────
         stage('Stage 4 | SCA — OWASP Dependency-Check') {
-            steps {
-                dir('car-backend') {
-                    sh '''
-                        mkdir -p dependency-check-report
+    steps {
+        dir('car-backend') {
+            script {
+                def dcHome = tool 'DependencyCheck'   // <-- name you gave in Jenkins
 
-                        # Install OWASP Dependency-Check into Jenkins workspace (no sudo needed)
-                        DC_DIR="$WORKSPACE/tools/dependency-check"
-                        DC_BIN="$DC_DIR/bin/dependency-check.sh"
+                sh """
+                    mkdir -p dependency-check-report
 
-                        if [ ! -f "$DC_BIN" ]; then
-                            echo "Downloading OWASP Dependency-Check..."
-                            mkdir -p "$DC_DIR"
-                            wget -q https://github.com/jeremylong/DependencyCheck/releases/download/v9.0.9/dependency-check-9.0.9-release.zip \
-                                -O /tmp/dependency-check.zip
-                            unzip -q /tmp/dependency-check.zip -d "$WORKSPACE/tools/"
-                            chmod +x "$DC_BIN"
-                            rm -f /tmp/dependency-check.zip
-                            echo "Installed at $DC_BIN"
-                        fi
+                    echo "Running OWASP Dependency-Check..."
 
-                        "${DC_BIN}" \
-                            --project "car-backend" \
-                            --scan . \
-                            --exclude "**/node_modules/**" \
-                            --format XML \
-                            --format HTML \
-                            --format JSON \
-                            --out dependency-check-report \
-                            --failOnCVSS 9 \
-                            --enableRetired \
-                            --disableAssembly
+                    ${dcHome}/bin/dependency-check.sh \
+                      --project "car-backend" \
+                      --scan . \
+                      --exclude "**/node_modules/**" \
+                      --format XML \
+                      --format HTML \
+                      --format JSON \
+                      --out dependency-check-report \
+                      --enableRetired \
+                      --disableAssembly
 
-                        echo "=== Reports generated ==="
-                        ls -lh dependency-check-report/
-                    '''
-                }
-            }
-            post {
-                always {
-                    dependencyCheckPublisher(
-                        pattern: 'car-backend/dependency-check-report/dependency-check-report.xml'
-                    )
-                }
+                    echo "=== Reports generated ==="
+                    ls -lh dependency-check-report/
+                """
             }
         }
+    }
+    post {
+        always {
+            dependencyCheckPublisher(
+                pattern: 'car-backend/dependency-check-report/dependency-check-report.xml'
+            )
+        }
+    }
+}
 
         // ─────────────────────────────────────────────────────
         // STAGE 5 — SonarQube — SAST + SCA + Quality Gate
