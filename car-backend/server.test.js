@@ -1,37 +1,10 @@
-// car-backend/server.test.js
+// server.test.js
+// Imports app.js directly — NOT server.js
+// This is the key fix: Jest instruments app.js for coverage
+// because app.listen() is never called during tests
+
 const request = require('supertest');
-const express = require('express');
-const cors    = require('cors');
-
-// Rebuild app for testing (don't call listen)
-const app = express();
-app.use(cors());
-app.use(express.json());
-
-const cars = [
-  { id:1, brand:"Maruti Suzuki", name:"Swift",  price:"6.49 L",  type:"Hatchback", fuel:"Petrol", img:"" },
-  { id:2, brand:"Maruti Suzuki", name:"Brezza", price:"10.49 L", type:"SUV",       fuel:"Petrol", img:"" },
-  { id:3, brand:"Skoda",         name:"Kushaq", price:"17.99 L", type:"SUV",       fuel:"Petrol", img:"" },
-  { id:4, brand:"Skoda",         name:"Slavia", price:"19.99 L", type:"Sedan",     fuel:"Petrol", img:"" },
-];
-const bookings = [];
-
-app.get('/health',       (req, res) => res.json({ status: 'ok' }));
-app.get('/api/cars',     (req, res) => res.json(cars));
-app.get('/api/cars/:id', (req, res) => {
-  const car = cars.find(c => c.id === +req.params.id);
-  car ? res.json(car) : res.status(404).json({ error: 'Not found' });
-});
-app.post('/api/bookings', (req, res) => {
-  const { name, phone, carId } = req.body;
-  if (!name || !phone || !carId)
-    return res.status(400).json({ error: 'name, phone, carId are required' });
-  const booking = { id: Date.now(), name, phone, carId, status: 'Confirmed' };
-  bookings.push(booking);
-  res.status(201).json(booking);
-});
-
-// ── Tests ────────────────────────────────────────────────────
+const app     = require('./app');   // ← app.js, not server.js
 
 describe('GET /health', () => {
   it('returns status ok', async () => {
@@ -91,6 +64,7 @@ describe('POST /api/bookings', () => {
       .post('/api/bookings')
       .send({ phone: '9999999999', carId: 1 });
     expect(res.statusCode).toBe(400);
+    expect(res.body.error).toBe('name, phone, carId are required');
   });
 
   it('returns 400 when phone is missing', async () => {

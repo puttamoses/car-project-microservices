@@ -5,7 +5,9 @@ WORKDIR /app
 COPY package*.json ./
 RUN npm install --omit=dev
 
+# Copy both files — server.js starts the app, app.js has all the logic
 COPY server.js ./
+COPY app.js    ./
 
 ENV PORT=5000
 EXPOSE 5000

@@ -176,8 +176,8 @@ pipeline {
                                 -Dsonar.projectName="Car Backend" \
                                 -Dsonar.projectVersion=${BUILD_NUMBER} \
                                 \
-                                -Dsonar.sources=. \
-                                -Dsonar.exclusions=node_modules/**,coverage/**,**/*.test.js,dependency-check-report/** \
+                                -Dsonar.sources=app.js \
+                                -Dsonar.exclusions=node_modules/**,coverage/**,**/*.test.js,server.js,dependency-check-report/** \
                                 -Dsonar.tests=. \
                                 -Dsonar.test.inclusions=**/*.test.js \
                                 \
