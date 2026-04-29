@@ -132,19 +132,19 @@ pipeline {
                     sh '''
                         mkdir -p dependency-check-report
 
-                        # Auto-install OWASP Dependency-Check into Jenkins home (no sudo needed)
-                        DC_INSTALL_DIR="${HOME}/dependency-check"
-                        DC_BIN="${DC_INSTALL_DIR}/bin/dependency-check.sh"
+                        # Install OWASP Dependency-Check into Jenkins workspace (no sudo needed)
+                        DC_DIR="$WORKSPACE/tools/dependency-check"
+                        DC_BIN="$DC_DIR/bin/dependency-check.sh"
 
-                        if [ ! -f "${DC_BIN}" ]; then
-                            echo "Installing OWASP Dependency-Check into ${DC_INSTALL_DIR}..."
-                            DC_VERSION="9.0.9"
-                            wget -q https://github.com/jeremylong/DependencyCheck/releases/download/v${DC_VERSION}/dependency-check-${DC_VERSION}-release.zip \
+                        if [ ! -f "$DC_BIN" ]; then
+                            echo "Downloading OWASP Dependency-Check..."
+                            mkdir -p "$DC_DIR"
+                            wget -q https://github.com/jeremylong/DependencyCheck/releases/download/v9.0.9/dependency-check-9.0.9-release.zip \
                                 -O /tmp/dependency-check.zip
-                            unzip -q /tmp/dependency-check.zip -d ${HOME}/
-                            chmod +x ${DC_BIN}
+                            unzip -q /tmp/dependency-check.zip -d "$WORKSPACE/tools/"
+                            chmod +x "$DC_BIN"
                             rm -f /tmp/dependency-check.zip
-                            echo "OWASP Dependency-Check installed at ${DC_BIN}"
+                            echo "Installed at $DC_BIN"
                         fi
 
                         "${DC_BIN}" \
