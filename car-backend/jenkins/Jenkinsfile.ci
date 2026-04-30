@@ -33,7 +33,7 @@ pipeline {
 
     tools {
         nodejs 'NodeJS-20'   // ✅ Manage Jenkins → Global Tool Configuration → NodeJS name
-        dependencyCheck 'OWASP-DC'
+        dependency-check 'OWASP-DC'
     }
 
     environment {
