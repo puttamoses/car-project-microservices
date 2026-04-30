@@ -122,21 +122,6 @@ pipeline {
 
         // ─────────────────────────────────────────────────────
        // ─────────────────────────────────────────────────────
-// STAGE 4 — SCA (OWASP Dependency-Check)
-//
-// Scans npm dependencies for known CVEs.
-// ✅ Enforces DIRECTLY — does not rely on SonarQube Quality Gate
-//
-// Fail strategy:
-//   CVSS >= 9.0 (CRITICAL) → pipeline stops here ❌
-//   CVSS 7.0–8.9 (HIGH)    → pipeline continues ⚠️ visible in Sonar
-//   CVSS < 7.0              → pipeline continues ✅
-//
-// Generates:
-//   dependency-check-report.xml  → Jenkins trend chart
-//   dependency-check-report.html → human readable
-//   dependency-check-report.json → SonarQube dashboard (visibility only)
-// ─────────────────────────────────────────────────────
 stage('Stage 4 | SCA — OWASP Dependency-Check') {
     steps {
         dir('car-backend') {
@@ -147,22 +132,33 @@ stage('Stage 4 | SCA — OWASP Dependency-Check') {
                     mkdir -p dependency-check-report
                     mkdir -p /var/lib/jenkins/.dependency-check
 
-                    # 🔥 Ensure Node dependency graph exists
+                    # Ensure lock file exists
                     if [ ! -f package-lock.json ]; then
                         echo "⚠️ package-lock.json missing → running npm install"
                         npm install
+                    fi
+
+                    # Check if NVD database is initialized
+                    if [ ! -f /var/lib/jenkins/.dependency-check/odc.mv.db ]; then
+                        echo "🧠 NVD DB not found → running initial update (one-time, takes ~5-10 min)..."
+                        /opt/dependency-check/bin/dependency-check.sh \
+                            --updateonly \
+                            --data /var/lib/jenkins/.dependency-check
+                        echo "✅ NVD DB initialized"
+                    else
+                        echo "✅ NVD DB found → skipping update"
                     fi
 
                     /opt/dependency-check/bin/dependency-check.sh \
                         --project "car-backend" \
                         --scan package.json \
                         --scan package-lock.json \
-                        --exclude "**/.git/**" \
-                        --exclude "**/node_modules/**" \
-                        --exclude "**/build/**" \
-                        --exclude "**/dist/**" \
-                        --exclude "**/coverage/**" \
-                        --exclude "**/dependency-check-report/**" \
+                        --exclude "*/.git/*" \
+                        --exclude "*/node_modules/*" \
+                        --exclude "*/build/*" \
+                        --exclude "*/dist/*" \
+                        --exclude "*/coverage/*" \
+                        --exclude "*/dependency-check-report/*" \
                         --format HTML \
                         --format XML \
                         --format JSON \
