@@ -138,31 +138,36 @@ pipeline {
         // ─────────────────────────────────────────────────────
        stage('Stage 4 | SCA — OWASP Dependency-Check') {
     steps {
-        dir('car-backend') {
-            dependencyCheck(
-                additionalArguments: '''
-                    --project car-backend
-                    --scan .
-                    --exclude "**/node_modules/**"
-                    --format ALL
-                    --failOnCVSS 9
-                    --enableRetired
-                    --disableAssembly
-                    --enableNodeAudit
-                    --out dependency-check-report
-                ''',
-                odcInstallation: 'OWASP-DC'
-            )
+        sh '''
+            set -e
 
-            // 🔍 Debug (keep for now)
-            sh 'echo "===== REPORT FILES ====="'
-            sh 'ls -R dependency-check-report || true'
-        }
+            echo "📂 Workspace:"
+            pwd
+
+            cd car-backend
+
+            echo "📦 Running OWASP Dependency-Check..."
+
+            # Required for v10
+            mkdir -p dependency-check-report
+
+            /opt/dependency-check/bin/dependency-check.sh \
+              --project "car-backend" \
+              --scan . \
+              --format XML \
+              --format HTML \
+              --out dependency-check-report \
+              --failOnCVSS 9
+
+            echo "✅ Reports generated:"
+            ls -l dependency-check-report
+        '''
     }
+
     post {
         always {
             dependencyCheckPublisher(
-                pattern: '**/dependency-check-report*.xml'
+                pattern: '**/dependency-check-report.xml'
             )
         }
     }
