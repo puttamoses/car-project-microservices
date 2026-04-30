@@ -139,32 +139,28 @@ pipeline {
        stage('Stage 4 | SCA — OWASP Dependency-Check') {
     steps {
         dir('car-backend') {
-
             script {
                 sh '''
                     set -e
 
                     echo "📦 OWASP Dependency-Check starting..."
 
-                    # Ensure dependency-check DB folder exists
+                    mkdir -p dependency-check-report
                     mkdir -p /var/lib/jenkins/.dependency-check
 
-                    # Ensure report folder exists
-                    mkdir -p dependency-check-report
-
-                    # Run scan on package-lock.json (BEST for Node.js)
                     /opt/dependency-check/bin/dependency-check.sh \
                         --project "car-backend" \
-                        --scan package-lock.json \
+                        --scan . \
                         --format HTML \
                         --format XML \
                         --out dependency-check-report \
                         --data /var/lib/jenkins/.dependency-check \
+                        --enableExperimental \
                         --noupdate \
                         --failOnCVSS 9 || true
 
-                    echo "📊 Report files:"
-                    ls -R dependency-check-report || true
+                    echo "📊 Reports generated:"
+                    find dependency-check-report -type f || true
                 '''
             }
         }
