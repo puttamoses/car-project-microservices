@@ -32,10 +32,8 @@ pipeline {
     agent any
 
     tools {
-        nodejs 'NodeJS-20'   // ✅ Manage Jenkins → Global Tool Configuration → NodeJS name
-        dependency-check 'OWASP-DC'
+    nodejs 'NodeJS-20'
     }
-
     environment {
         SONAR_HOST_URL = 'http://your-sonar-server:9000'  // ✅ your SonarQube URL
         AWS_REGION     = 'ap-south-1'                     // ✅ your AWS region
@@ -150,12 +148,14 @@ pipeline {
                     --failOnCVSS 9
                     --enableRetired
                     --disableAssembly
+                    --enableNodeAudit
                     --out dependency-check-report
                 ''',
                 odcInstallation: 'OWASP-DC'
             )
 
-            // ✅ Debug (temporary)
+            // 🔍 Debug (keep for now)
+            sh 'echo "===== REPORT FILES ====="'
             sh 'ls -R dependency-check-report || true'
         }
     }
@@ -167,7 +167,6 @@ pipeline {
         }
     }
 }
-
         // ─────────────────────────────────────────────────────
         // STAGE 5 — SAST (SonarQube)
         //
