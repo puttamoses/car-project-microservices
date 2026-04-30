@@ -213,7 +213,7 @@ pipeline {
         }
 
         // ─────────────────────────────────────────────────────
-        /stage('Stage 6 | Quality Gate — HARD STOP') {
+         stage('Stage 6 | Quality Gate — HARD STOP') {
     steps {
         script {
             timeout(time: 20, unit: 'MINUTES') {
