@@ -146,12 +146,17 @@ pipeline {
 
                 cd car-backend
 
+                # Ensure dependency file exists (CRITICAL FIX)
+                npm ci || npm install
+
+                # Create required folders
                 mkdir -p dependency-check-report
                 mkdir -p /var/lib/jenkins/.dependency-check
 
+                # Run OWASP correctly (Node.js safe scan)
                 /opt/dependency-check/bin/dependency-check.sh \
                   --project "car-backend" \
-                  --scan . \
+                  --scan package-lock.json \
                   --format XML \
                   --format HTML \
                   --out dependency-check-report \
@@ -160,8 +165,8 @@ pipeline {
                   --noupdate \
                   --failOnCVSS 9
 
-                echo "📊 Report files:"
-                find dependency-check-report || true
+                echo "📊 Report check:"
+                ls -R dependency-check-report || true
             '''
         }
     }
