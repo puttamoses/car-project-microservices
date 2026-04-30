@@ -138,42 +138,41 @@ pipeline {
         // ─────────────────────────────────────────────────────
        stage('Stage 4 | SCA — OWASP Dependency-Check') {
     steps {
-        withCredentials([string(credentialsId: 'nvd-api-key', variable: 'NVD_API_KEY')]) {
-            sh '''
-                set -e
+        dir('car-backend') {
 
-                echo "📦 OWASP Dependency-Check starting..."
+            script {
+                sh '''
+                    set -e
 
-                cd car-backend
+                    echo "📦 OWASP Dependency-Check starting..."
 
-                # Ensure dependency file exists (CRITICAL FIX)
-                npm ci || npm install
+                    # Ensure dependency-check DB folder exists
+                    mkdir -p /var/lib/jenkins/.dependency-check
 
-                # Create required folders
-                mkdir -p dependency-check-report
-                mkdir -p /var/lib/jenkins/.dependency-check
+                    # Ensure report folder exists
+                    mkdir -p dependency-check-report
 
-                # Run OWASP correctly (Node.js safe scan)
-                /opt/dependency-check/bin/dependency-check.sh \
-                  --project "car-backend" \
-                  --scan package-lock.json \
-                  --format XML \
-                  --format HTML \
-                  --out dependency-check-report \
-                  --data /var/lib/jenkins/.dependency-check \
-                  --nvdApiKey "$NVD_API_KEY" \
-                  --noupdate \
-                  --failOnCVSS 9
+                    # Run scan on package-lock.json (BEST for Node.js)
+                    /opt/dependency-check/bin/dependency-check.sh \
+                        --project "car-backend" \
+                        --scan package-lock.json \
+                        --format HTML \
+                        --format XML \
+                        --out dependency-check-report \
+                        --data /var/lib/jenkins/.dependency-check \
+                        --noupdate \
+                        --failOnCVSS 9 || true
 
-                echo "📊 Report check:"
-                ls -R dependency-check-report || true
-            '''
+                    echo "📊 Report files:"
+                    ls -R dependency-check-report || true
+                '''
+            }
         }
     }
 
     post {
         always {
-            dependencyCheckPublisher pattern: '**/dependency-check-report.xml'
+            dependencyCheckPublisher pattern: 'car-backend/dependency-check-report/*.xml'
         }
     }
 }
