@@ -138,36 +138,41 @@ pipeline {
         // ─────────────────────────────────────────────────────
        stage('Stage 4 | SCA — OWASP Dependency-Check') {
     steps {
-        sh '''
-            set -e
+        withCredentials([string(credentialsId: 'nvd-api-key', variable: 'NVD_API_KEY')]) {
+            sh '''
+                set -e
 
-            cd car-backend
+                echo "📦 OWASP Dependency-Check starting..."
 
-            echo "📦 Starting Dependency-Check..."
+                cd car-backend
 
-            # Required for v10
-            mkdir -p dependency-check-report
+                # Ensure report folder exists
+                mkdir -p dependency-check-report
 
-            # Run scan (with dedicated DB path)
-            /opt/dependency-check/bin/dependency-check.sh \
-              --project "car-backend" \
-              --scan . \
-              --format XML \
-              --format HTML \
-              --out dependency-check-report \
-              --data /var/lib/jenkins/.dependency-check \
-              --failOnCVSS 9
+                # Ensure DB folder exists (important for performance)
+                mkdir -p /var/lib/jenkins/.dependency-check
 
-            echo "✅ Reports:"
-            ls -l dependency-check-report
-        '''
+                # Run OWASP Dependency-Check
+                /opt/dependency-check/bin/dependency-check.sh \
+                  --project "car-backend" \
+                  --scan . \
+                  --format XML \
+                  --format HTML \
+                  --out dependency-check-report \
+                  --data /var/lib/jenkins/.dependency-check \
+                  --nvdApiKey "$NVD_API_KEY" \
+                  --enableExperimental \
+                  --failOnCVSS 9
+
+                echo "📊 Reports generated:"
+                ls -R dependency-check-report || true
+            '''
+        }
     }
 
     post {
         always {
-            dependencyCheckPublisher(
-                pattern: '**/dependency-check-report.xml'
-            )
+            dependencyCheckPublisher pattern: '**/dependency-check-report.xml'
         }
     }
 }
