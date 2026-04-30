@@ -213,20 +213,21 @@ pipeline {
         }
 
         // ─────────────────────────────────────────────────────
-        // STAGE 6 — Quality Gate (HARD STOP)
-        //
-        // Waits for SonarQube to return gate result.
-        // Pipeline stops here if gate FAILS.
-        // Docker image is NOT built until gate passes.
-        // ─────────────────────────────────────────────────────
-        stage('Stage 6 | Quality Gate — HARD STOP') {
-            steps {
-                timeout(time: 35, unit: 'MINUTES') {
-                    waitForQualityGate abortPipeline: true
+        /stage('Stage 6 | Quality Gate — HARD STOP') {
+    steps {
+        script {
+            timeout(time: 20, unit: 'MINUTES') {
+                def qg = waitForQualityGate()
+
+                echo "🔎 Quality Gate Status: ${qg.status}"
+
+                if (qg.status != 'OK') {
+                    error "❌ Quality Gate Failed: ${qg.status}"
                 }
             }
         }
-
+    }
+}
         // ─────────────────────────────────────────────────────
         // STAGE 7 — Docker Build
         // ─────────────────────────────────────────────────────
