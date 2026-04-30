@@ -121,28 +121,27 @@ pipeline {
         }
 
         // ─────────────────────────────────────────────────────
-        // STAGE 4 — SCA (OWASP Dependency-Check)
-        //
-        // Scans all npm dependencies for known CVEs.
-        // Fails build if CVSS score >= 9 (CRITICAL).
-        //
-        // Uses Jenkins Global Tool — no manual install needed.
-        // ✅ Setup: Manage Jenkins → Global Tool Configuration
-        //           → Dependency-Check → Add → Name: OWASP-DC
-        //           → Install automatically ✅ → Save
-        //
-        // Generates:
-        //   dependency-check-report.xml  → Jenkins trend chart
-        //   dependency-check-report.html → human readable
-        //   dependency-check-report.json → SonarQube import (Stage 5)
-        // ─────────────────────────────────────────────────────
-       stage('Stage 4 | SCA — OWASP Dependency-Check') {
+       // ─────────────────────────────────────────────────────
+// STAGE 4 — SCA (OWASP Dependency-Check)
+//
+// Scans npm dependencies for known CVEs.
+// ✅ Enforces DIRECTLY — does not rely on SonarQube Quality Gate
+//
+// Fail strategy:
+//   CVSS >= 9.0 (CRITICAL) → pipeline stops here ❌
+//   CVSS 7.0–8.9 (HIGH)    → pipeline continues ⚠️ visible in Sonar
+//   CVSS < 7.0              → pipeline continues ✅
+//
+// Generates:
+//   dependency-check-report.xml  → Jenkins trend chart
+//   dependency-check-report.html → human readable
+//   dependency-check-report.json → SonarQube dashboard (visibility only)
+// ─────────────────────────────────────────────────────
+stage('Stage 4 | SCA — OWASP Dependency-Check') {
     steps {
         dir('car-backend') {
             script {
                 sh '''
-                    set -e
-
                     echo "📦 OWASP Dependency-Check starting..."
 
                     mkdir -p dependency-check-report
@@ -151,13 +150,23 @@ pipeline {
                     /opt/dependency-check/bin/dependency-check.sh \
                         --project "car-backend" \
                         --scan . \
+                        --exclude */.git/* \
+                        --exclude */node_modules/* \
+                        --exclude */build/* \
+                        --exclude */dist/* \
+                        --exclude */coverage/* \
+                        --exclude */dependency-check-report/* \
                         --format HTML \
                         --format XML \
+                        --format JSON \
                         --out dependency-check-report \
                         --data /var/lib/jenkins/.dependency-check \
                         --enableExperimental \
                         --noupdate \
-                        --failOnCVSS 9 || true
+                        --failOnCVSS 9
+                        # ^^^ HARD enforcement here — not via SonarQube Quality Gate
+                        # CRITICAL CVEs (9.0+) stop the pipeline immediately
+                        # SonarQube only used for visibility of lower severity CVEs
 
                     echo "📊 Reports generated:"
                     find dependency-check-report -type f || true
@@ -172,68 +181,63 @@ pipeline {
         }
     }
 }
-        // ─────────────────────────────────────────────────────
-        // STAGE 5 — SAST (SonarQube)
-        //
-        // SonarQube scans source code for:
-        //   - Security vulnerabilities (OWASP Top 10, XSS, injection)
-        //   - Bugs and code smells
-        //   - Coverage from Stage 3 (lcov.info)
-        //   - OWASP CVEs from Stage 4 (dependency-check JSON)
-        //
-        // All results visible in one SonarQube dashboard:
-        //   Overview  → overall score
-        //   Issues    → SAST findings
-        //   Security  → OWASP CVEs from dependency-check
-        //   Coverage  → line/branch % from Jest
-        // ─────────────────────────────────────────────────────
-        stage('Stage 5 | SAST — SonarQube Scan') {
-            steps {
-                dir('car-backend') {
-                    withSonarQubeEnv('SonarQube') {  // ✅ must match Jenkins → Configure System → SonarQube name
-                        sh '''
-                            npx sonar-scanner \
-                                -Dsonar.projectKey=car-backend \
-                                -Dsonar.projectName="Car Backend" \
-                                -Dsonar.projectVersion=${BUILD_NUMBER} \
-                                -Dsonar.sources=. \
-                                -Dsonar.exclusions=node_modules/**,coverage/**,**/*.test.js,dependency-check-report/** \
-                                -Dsonar.tests=. \
-                                -Dsonar.test.inclusions=**/*.test.js \
-                                -Dsonar.javascript.lcov.reportPaths=coverage/lcov.info \
-                                -Dsonar.dependencyCheck.jsonReportPath=dependency-check-report/dependency-check-report.json \
-                                -Dsonar.dependencyCheck.htmlReportPath=dependency-check-report/dependency-check-report.html \
-                                -Dsonar.host.url=${SONAR_HOST_URL} \
-                                -Dsonar.login=${SONAR_TOKEN}
-                        '''
-                    }
-                }
+
+// ─────────────────────────────────────────────────────
+// STAGE 5 — SAST (SonarQube)
+//
+// SonarQube scans source code for:
+//   - Security vulnerabilities (OWASP Top 10, XSS, injection)
+//   - Bugs and code smells
+//   - Coverage from Stage 3 (lcov.info)
+//
+// SCA CVEs from Stage 4 imported for VISIBILITY ONLY:
+//   ⚠️  External issues are NOT counted in Quality Gate by default
+//   ✅  CVEs still visible in Sonar Security dashboard
+//   ✅  Enforcement already done in Stage 4 directly
+// ─────────────────────────────────────────────────────
+stage('Stage 5 | SAST — SonarQube Scan') {
+    steps {
+        dir('car-backend') {
+            withSonarQubeEnv('SonarQube') {
+                sh '''
+                    npx sonar-scanner \
+                        -Dsonar.projectKey=car-backend \
+                        -Dsonar.projectName="Car Backend" \
+                        -Dsonar.projectVersion=${BUILD_NUMBER} \
+                        -Dsonar.sources=. \
+                        -Dsonar.exclusions=node_modules/*,coverage/,/.test.js,dependency-check-report/** \
+                        -Dsonar.tests=. \
+                        -Dsonar.test.inclusions=*/.test.js \
+                        -Dsonar.javascript.lcov.reportPaths=coverage/lcov.info \
+                        -Dsonar.dependencyCheck.jsonReportPath=dependency-check-report/dependency-check-report.json \
+                        -Dsonar.dependencyCheck.htmlReportPath=dependency-check-report/dependency-check-report.html \
+                        -Dsonar.host.url=${SONAR_HOST_URL} \
+                        -Dsonar.login=${SONAR_TOKEN}
+                '''
             }
         }
+    }
+}
 
-        // ─────────────────────────────────────────────────────
-        // STAGE 6 — Quality Gate (HARD STOP)
-        //
-        // Waits for SonarQube to finish analysis and return
-        // the Quality Gate result.
-        //
-        // If gate FAILS → pipeline stops here.
-        // Docker image is NOT built. Nothing is deployed.
-        //
-        // Quality Gate conditions (set in SonarQube dashboard):
-        //   Coverage        < 70%  → FAIL
-        //   Reliability     < A    → FAIL
-        //   Security        < A    → FAIL
-        //   Maintainability < A    → FAIL
-        // ─────────────────────────────────────────────────────
-        stage('Stage 6 | Quality Gate — HARD STOP') {
-            steps {
-                timeout(time: 5, unit: 'MINUTES') {
-                    waitForQualityGate abortPipeline: true
-                }
-            }
+// ─────────────────────────────────────────────────────
+// STAGE 6 — Quality Gate (HARD STOP)
+//
+// Enforces SAST findings only:
+//   Coverage        < 70%  → FAIL
+//   Reliability     < A    → FAIL
+//   Security        < A    → FAIL  (SAST issues only)
+//   Maintainability < A    → FAIL
+//
+// ⚠️  SCA (CVE) enforcement already happened in Stage 4
+// ⚠️  External issues from Dependency-Check NOT counted here
+// ─────────────────────────────────────────────────────
+stage('Stage 6 | Quality Gate — HARD STOP') {
+    steps {
+        timeout(time: 5, unit: 'MINUTES') {
+            waitForQualityGate abortPipeline: true
         }
-
+    }
+}
         // ─────────────────────────────────────────────────────
         // STAGE 7 — Docker Build
         // ─────────────────────────────────────────────────────
