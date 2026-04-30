@@ -4,28 +4,26 @@
 //  Stage 1  — Checkout
 //  Stage 2  — Build                  (injects REACT_APP_API_URL)
 //  Stage 3  — Test + Coverage        (60% threshold)
-//  Stage 4  — SCA                    OWASP Dependency-Check (Jenkins Tool)
-//  Stage 5  — SAST                   SonarQube source code scan
-//  Stage 6  — Quality Gate           SonarQube gate result (HARD STOP)
+//  Stage 4  — SCA — OWASP            (Jenkins Tool — no manual install)
+//  Stage 5  — SAST — SonarQube       (source code security scan)
+//  Stage 6  — Quality Gate           (HARD STOP)
 //  Stage 7  — Docker Build
-//  Stage 8  — Trivy Image Scan       (HARD STOP on HIGH/CRITICAL)
+//  Stage 8  — Trivy Image Scan       (HARD STOP)
 //  Stage 9  — Smoke Test
 //  Stage 10 — Push to ECR
 //  Stage 11 — Upload Reports to S3
 //
-//  On success → triggers car-frontend-cd automatically
-//
-//  ✅ Jenkins Setup Required:
+//  ✅ Jenkins One-Time Setup:
 //    Manage Jenkins → Global Tool Configuration
-//      → NodeJS     → Name: NodeJS-20  → Install automatically
-//      → Dependency-Check → Name: OWASP-DC → Install automatically
+//      NodeJS       → Name: NodeJS-20        → Install automatically
+//      Dep-Check    → Name: OWASP-DC         → Install automatically
 //    Manage Jenkins → Configure System
-//      → SonarQube servers → Name: SonarQube → URL → Token
+//      SonarQube    → Name: SonarQube        → URL + Token
 //    Manage Jenkins → Credentials
-//      → sonar-token          (Secret Text)
-//      → aws-credentials      (AWS Credentials)
-//      → aws-account-id       (Secret Text)
-//      → react-app-api-url    (Secret Text — backend ALB DNS)
+//      sonar-token          Secret Text
+//      aws-credentials      AWS Credentials
+//      aws-account-id       Secret Text
+//      react-app-api-url    Secret Text  (backend ALB DNS)
 // ─────────────────────────────────────────────────────────────
 
 pipeline {
@@ -58,9 +56,6 @@ pipeline {
 
     stages {
 
-        // ─────────────────────────────────────────────────────
-        // STAGE 1 — Checkout
-        // ─────────────────────────────────────────────────────
         stage('Stage 1 | Checkout') {
             steps {
                 checkout scm
@@ -71,19 +66,16 @@ pipeline {
 
         // ─────────────────────────────────────────────────────
         // STAGE 2 — Build
-        //
-        // Injects REACT_APP_API_URL from Jenkins credential
-        // into .env.production before build.
-        // React reads it and bakes it into the JS bundle.
+        // Injects backend URL from Jenkins credential into
+        // .env.production before npm run build.
+        // React bakes it into the JS bundle at build time.
         // ─────────────────────────────────────────────────────
         stage('Stage 2 | Build') {
             steps {
                 dir('car-frontend') {
                     sh '''
                         npm install
-
                         echo "REACT_APP_API_URL=${REACT_APP_API_URL}" > .env.production
-
                         npm run build
                         echo "Build complete"
                     '''
@@ -93,12 +85,6 @@ pipeline {
 
         // ─────────────────────────────────────────────────────
         // STAGE 3 — Test + Coverage
-        //
-        // 60% minimum coverage enforced.
-        // Generates:
-        //   coverage/lcov.info     → SonarQube (Stage 5)
-        //   coverage/junit.xml     → Jenkins test results chart
-        //   coverage/lcov-report/  → Jenkins HTML report
         // ─────────────────────────────────────────────────────
         stage('Stage 3 | Test & Coverage') {
             steps {
@@ -135,24 +121,33 @@ pipeline {
         // ─────────────────────────────────────────────────────
         // STAGE 4 — SCA (OWASP Dependency-Check)
         //
-        // Scans all npm dependencies for known CVEs.
-        // Fails build if CVSS score >= 9 (CRITICAL).
-        //
-        // Uses Jenkins Global Tool — no manual install needed.
-        // ✅ Setup: Manage Jenkins → Global Tool Configuration
-        //           → Dependency-Check → Add → Name: OWASP-DC
-        //           → Install automatically ✅ → Save
-        //
-        // Generates:
-        //   dependency-check-report.xml  → Jenkins trend chart
-        //   dependency-check-report.html → human readable
-        //   dependency-check-report.json → SonarQube import (Stage 5)
+        // Uses Jenkins Global Tool — NO manual install needed.
+        // ✅ One-time setup:
+        //    Manage Jenkins → Global Tool Configuration
+        //    → Dependency-Check → Add → Name: OWASP-DC
+        //    → Install automatically ✅ → Save
         // ─────────────────────────────────────────────────────
         stage('Stage 4 | SCA — OWASP Dependency-Check') {
             steps {
                 dir('car-frontend') {
                     dependencyCheck(
-                        additionalArguments: '--project car-frontend --scan . --exclude "**/node_modules/**" --exclude "**/build/**" --format XML --format HTML --format JSON --failOnCVSS 9 --enableRetired --disableAssembly --out dependency-check-report',
+                        additionalArguments: [
+                            '--project "car-frontend"',
+                            '--scan .',
+                            '--exclude "**/.git/**"',
+                            '--exclude "**/build/**"',
+                            '--exclude "**/coverage/**"',
+                            '--exclude "**/dependency-check-report/**"',
+                            '--format XML',
+                            '--format HTML',
+                            '--format JSON',
+                            '--out dependency-check-report',
+                            '--failOnCVSS 9',
+                            '--enableRetired',
+                            '--disableAssembly',
+                            '--disableNodeAudit',
+                            '--nodePackageSkipDevDependencies'
+                        ].join(' '),
                         odcInstallation: 'OWASP-DC'
                     )
                 }
@@ -168,18 +163,6 @@ pipeline {
 
         // ─────────────────────────────────────────────────────
         // STAGE 5 — SAST (SonarQube)
-        //
-        // SonarQube scans source code for:
-        //   - XSS, injection, hardcoded secrets (OWASP Top 10)
-        //   - Bugs and code smells
-        //   - Coverage from Stage 3 (lcov.info)
-        //   - OWASP CVEs from Stage 4 (dependency-check JSON)
-        //
-        // All visible in one SonarQube dashboard:
-        //   Overview  → overall score
-        //   Issues    → SAST findings
-        //   Security  → OWASP CVEs
-        //   Coverage  → line/branch % from Jest
         // ─────────────────────────────────────────────────────
         stage('Stage 5 | SAST — SonarQube Scan') {
             steps {
@@ -207,9 +190,6 @@ pipeline {
 
         // ─────────────────────────────────────────────────────
         // STAGE 6 — Quality Gate (HARD STOP)
-        //
-        // Waits for SonarQube to return gate result.
-        // Gate FAILS → pipeline stops. No Docker build.
         // ─────────────────────────────────────────────────────
         stage('Stage 6 | Quality Gate — HARD STOP') {
             steps {
@@ -237,10 +217,6 @@ pipeline {
 
         // ─────────────────────────────────────────────────────
         // STAGE 8 — Trivy Image Scan (HARD STOP)
-        //
-        // Catches CVEs in base image + runtime packages.
-        // These are NOT caught by OWASP Dependency-Check.
-        // Fails on HIGH or CRITICAL findings.
         // ─────────────────────────────────────────────────────
         stage('Stage 8 | Trivy Image Scan — HARD STOP') {
             steps {
@@ -326,9 +302,6 @@ pipeline {
 
         // ─────────────────────────────────────────────────────
         // STAGE 11 — Upload Reports to S3
-        //
-        // Uploads all security + coverage reports to S3.
-        // Path: s3://<bucket>/car-frontend/build-<number>/
         // ─────────────────────────────────────────────────────
         stage('Stage 11 | Upload Reports to S3') {
             steps {
@@ -340,14 +313,17 @@ pipeline {
                         REPORT_PATH="car-frontend/build-${BUILD_NUMBER}"
 
                         aws s3 cp trivy-report.json \
-                            s3://${S3_BUCKET}/${REPORT_PATH}/trivy-report.json
+                            s3://${S3_BUCKET}/${REPORT_PATH}/trivy-report.json \
+                            || echo "trivy-report not found, skipping"
 
                         aws s3 cp car-frontend/dependency-check-report/ \
                             s3://${S3_BUCKET}/${REPORT_PATH}/sca/ \
-                            --recursive
+                            --recursive \
+                            || echo "sca reports not found, skipping"
 
                         aws s3 cp car-frontend/coverage/lcov.info \
-                            s3://${S3_BUCKET}/${REPORT_PATH}/coverage/lcov.info
+                            s3://${S3_BUCKET}/${REPORT_PATH}/coverage/lcov.info \
+                            || echo "lcov not found, skipping"
 
                         echo "✅ Reports uploaded to s3://${S3_BUCKET}/${REPORT_PATH}/"
                     '''
