@@ -141,25 +141,24 @@ pipeline {
         sh '''
             set -e
 
-            echo "📂 Workspace:"
-            pwd
-
             cd car-backend
 
-            echo "📦 Running OWASP Dependency-Check..."
+            echo "📦 Starting Dependency-Check..."
 
             # Required for v10
             mkdir -p dependency-check-report
 
+            # Run scan (with dedicated DB path)
             /opt/dependency-check/bin/dependency-check.sh \
               --project "car-backend" \
               --scan . \
               --format XML \
               --format HTML \
               --out dependency-check-report \
+              --data /var/lib/jenkins/.dependency-check \
               --failOnCVSS 9
 
-            echo "✅ Reports generated:"
+            echo "✅ Reports:"
             ls -l dependency-check-report
         '''
     }
