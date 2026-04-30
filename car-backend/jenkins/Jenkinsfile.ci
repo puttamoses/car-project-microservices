@@ -146,13 +146,9 @@ pipeline {
 
                 cd car-backend
 
-                # Ensure report folder exists
                 mkdir -p dependency-check-report
-
-                # Ensure DB folder exists (important for performance)
                 mkdir -p /var/lib/jenkins/.dependency-check
 
-                # Run OWASP Dependency-Check
                 /opt/dependency-check/bin/dependency-check.sh \
                   --project "car-backend" \
                   --scan . \
@@ -161,11 +157,11 @@ pipeline {
                   --out dependency-check-report \
                   --data /var/lib/jenkins/.dependency-check \
                   --nvdApiKey "$NVD_API_KEY" \
-                  --enableExperimental \
+                  --noupdate \
                   --failOnCVSS 9
 
-                echo "📊 Reports generated:"
-                ls -R dependency-check-report || true
+                echo "📊 Report files:"
+                find dependency-check-report || true
             '''
         }
     }
