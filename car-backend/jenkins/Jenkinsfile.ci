@@ -147,15 +147,22 @@ stage('Stage 4 | SCA — OWASP Dependency-Check') {
                     mkdir -p dependency-check-report
                     mkdir -p /var/lib/jenkins/.dependency-check
 
+                    # 🔥 Ensure Node dependency graph exists
+                    if [ ! -f package-lock.json ]; then
+                        echo "⚠️ package-lock.json missing → running npm install"
+                        npm install
+                    fi
+
                     /opt/dependency-check/bin/dependency-check.sh \
                         --project "car-backend" \
-                        --scan . \
-                        --exclude */.git/* \
-                        --exclude */node_modules/* \
-                        --exclude */build/* \
-                        --exclude */dist/* \
-                        --exclude */coverage/* \
-                        --exclude */dependency-check-report/* \
+                        --scan package.json \
+                        --scan package-lock.json \
+                        --exclude "**/.git/**" \
+                        --exclude "**/node_modules/**" \
+                        --exclude "**/build/**" \
+                        --exclude "**/dist/**" \
+                        --exclude "**/coverage/**" \
+                        --exclude "**/dependency-check-report/**" \
                         --format HTML \
                         --format XML \
                         --format JSON \
@@ -164,9 +171,6 @@ stage('Stage 4 | SCA — OWASP Dependency-Check') {
                         --enableExperimental \
                         --noupdate \
                         --failOnCVSS 9
-                        # ^^^ HARD enforcement here — not via SonarQube Quality Gate
-                        # CRITICAL CVEs (9.0+) stop the pipeline immediately
-                        # SonarQube only used for visibility of lower severity CVEs
 
                     echo "📊 Reports generated:"
                     find dependency-check-report -type f || true
