@@ -221,7 +221,7 @@ pipeline {
         // ─────────────────────────────────────────────────────
         stage('Stage 6 | Quality Gate — HARD STOP') {
             steps {
-                timeout(time: 5, unit: 'MINUTES') {
+                timeout(time: 35, unit: 'MINUTES') {
                     waitForQualityGate abortPipeline: true
                 }
             }
