@@ -130,6 +130,7 @@ pipeline {
         stage('Stage 4 | SCA — OWASP Dependency-Check') {
             steps {
                 dir('car-frontend') {
+                    sh 'mkdir -p dependency-check-report'
                     dependencyCheck(
                         additionalArguments: [
                             '--project "car-frontend"',
@@ -193,8 +194,57 @@ pipeline {
         // ─────────────────────────────────────────────────────
         stage('Stage 6 | Quality Gate — HARD STOP') {
             steps {
-                timeout(time: 5, unit: 'MINUTES') {
-                    waitForQualityGate abortPipeline: true
+                script {
+                    def sonarUrl   = env.SONAR_HOST_URL
+                    def token      = env.SONAR_TOKEN
+                    def taskId     = ''
+                    def maxRetries = 30
+                    def retries    = 0
+
+                    def reportFile = 'car-frontend/.scannerwork/report-task.txt'
+                    def reportText = readFile(reportFile)
+                    reportText.split('\n').each { line ->
+                        if (line.startsWith('ceTaskId=')) {
+                            taskId = line.replace('ceTaskId=', '').trim()
+                        }
+                    }
+
+                    echo "Polling SonarQube task: ${taskId}"
+
+                    def status = 'PENDING'
+                    while (status in ['PENDING', 'IN_PROGRESS'] && retries < maxRetries) {
+                        sleep(10)
+                        retries++
+                        def response = sh(
+                            script: "curl -sf -u ${token}: ${sonarUrl}/api/ce/task?id=${taskId}",
+                            returnStdout: true
+                        ).trim()
+                        def json = readJSON text: response
+                        status = json.task.status
+                        echo "Attempt ${retries}/${maxRetries} — Status: ${status}"
+                    }
+
+                    if (status == 'SUCCESS') {
+                        def analysisId = sh(
+                            script: "curl -sf -u ${token}: ${sonarUrl}/api/ce/task?id=${taskId} | python3 -c \"import sys,json; print(json.load(sys.stdin)['task']['analysisId'])\"",
+                            returnStdout: true
+                        ).trim()
+                        def gateResponse = sh(
+                            script: "curl -sf -u ${token}: \"${sonarUrl}/api/qualitygates/project_status?analysisId=${analysisId}\"",
+                            returnStdout: true
+                        ).trim()
+                        def gateJson   = readJSON text: gateResponse
+                        def gateStatus = gateJson.projectStatus.status
+                        echo "Quality Gate Status: ${gateStatus}"
+                        if (gateStatus != 'OK') {
+                            error "Quality Gate FAILED: ${gateStatus} — check ${sonarUrl}/dashboard?id=car-frontend"
+                        }
+                        echo 'Quality Gate PASSED'
+                    } else if (retries >= maxRetries) {
+                        error "Quality Gate timed out — SonarQube task still ${status}"
+                    } else {
+                        error "SonarQube task ended with status: ${status}"
+                    }
                 }
             }
         }
