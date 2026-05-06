@@ -208,10 +208,10 @@ pipeline {
                     retries++
 
                     def response = sh(
-                        script: '''
+                        script: """
                             curl -sf -u "$SONAR_TOKEN:" \
-                            "$SONAR_HOST_URL/api/ce/task?id='"${taskId}"'"
-                        ''',
+                            "${sonarUrl}/api/ce/task?id=${taskId}"
+                        """,
                         returnStdout: true
                     ).trim()
 
@@ -224,19 +224,19 @@ pipeline {
                 if (status == 'SUCCESS') {
 
                     def analysisId = sh(
-                        script: '''
+                        script: """
                             curl -sf -u "$SONAR_TOKEN:" \
-                            "$SONAR_HOST_URL/api/ce/task?id='"${taskId}"'" \
+                            "${sonarUrl}/api/ce/task?id=${taskId}" \
                             | python3 -c "import sys,json; print(json.load(sys.stdin)['task']['analysisId'])"
-                        ''',
+                        """,
                         returnStdout: true
                     ).trim()
 
                     def gateResponse = sh(
-                        script: '''
+                        script: """
                             curl -sf -u "$SONAR_TOKEN:" \
-                            "$SONAR_HOST_URL/api/qualitygates/project_status?analysisId='"${analysisId}"'"
-                        ''',
+                            "${sonarUrl}/api/qualitygates/project_status?analysisId=${analysisId}"
+                        """,
                         returnStdout: true
                     ).trim()
 
@@ -252,9 +252,9 @@ pipeline {
                     echo '✅ Quality Gate PASSED'
 
                 } else if (retries >= maxRetries) {
-                    error "❌ Quality Gate timed out after ${maxRetries * 10}s — SonarQube task still ${status}"
+                    error "❌ Timeout after ${maxRetries * 10}s — status: ${status}"
                 } else {
-                    error "❌ SonarQube task ended with status: ${status}"
+                    error "❌ Sonar task ended with status: ${status}"
                 }
             }
         }
