@@ -104,25 +104,27 @@ pipeline {
     steps {
         dir('car-backend') {
             sh 'mkdir -p dependency-check-report'
-            dependencyCheck(
-                additionalArguments: [
-                    '--project car-backend',
-                    '--scan .',
-                    '--exclude **/.git/**',
-                    '--exclude **/node_modules/**',
-                    '--exclude **/coverage/**',
-                    '--exclude **/dependency-check-report/**',
-                    '--format XML',
-                    '--format HTML',
-                    '--format JSON',
-                    '--out dependency-check-report',
-                    '--failOnCVSS 9',
-                    '--disableAssembly',
-                    '--disableNodeAudit'
-                    // ← NO --nvdApiKey for DC 8.x
-                ].join(' '),
-                odcInstallation: 'OWASP-DC'
-            )
+            withCredentials([string(credentialsId: 'nvd-api-key', variable: 'NVD_KEY')]) {
+                dependencyCheck(
+                    additionalArguments: [
+                        '--project car-backend',
+                        '--scan .',
+                        '--exclude **/.git/**',
+                        '--exclude **/node_modules/**',
+                        '--exclude **/coverage/**',
+                        '--exclude **/dependency-check-report/**',
+                        '--format XML',
+                        '--format HTML',
+                        '--format JSON',
+                        '--out dependency-check-report',
+                        '--failOnCVSS 9',
+                        '--disableAssembly',
+                        '--disableNodeAudit',
+                        "--nvdApiKey ${NVD_KEY}"
+                    ].join(' '),
+                    odcInstallation: 'OWASP-DC'
+                )
+            }
         }
     }
     post {
