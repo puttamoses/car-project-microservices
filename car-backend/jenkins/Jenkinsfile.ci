@@ -184,55 +184,76 @@ pipeline {
     steps {
         script {
 
-            // ✅ Correct path (important)
-            def reportFile = 'car-backend/.scannerwork/report-task.txt'
-
-            def taskId = readFile(reportFile)
+            def taskId = readFile('car-backend/.scannerwork/report-task.txt')
                 .split('\n')
                 .find { it.startsWith('ceTaskId=') }
                 ?.replace('ceTaskId=', '')
                 ?.trim()
 
             if (!taskId) {
-                error "❌ ceTaskId not found in ${reportFile}"
+                error "❌ ceTaskId not found"
             }
 
             echo "🔎 Polling SonarQube task: ${taskId}"
 
             withCredentials([string(credentialsId: 'sonar-token', variable: 'SONAR_TOKEN')]) {
 
-                def status = 'PENDING'
-                int retries = 0
-                int maxRetries = 30
+                timeout(time: 5, unit: 'MINUTES') {
 
-                while (status in ['PENDING', 'IN_PROGRESS'] && retries < maxRetries) {
-                    sleep 10
-                    retries++
+                    waitUntil {
 
-                    def response = sh(
-                        script: """
-                            curl -sf -u "\$SONAR_TOKEN:" \
-                            "${env.SONAR_HOST_URL}/api/ce/task?id=${taskId}"
-                        """,
-                        returnStdout: true
-                    ).trim()
+                        sleep 10
 
-                    def json = readJSON text: response
-                    status = json.task.status
+                        def response = sh(
+                            script: """
+                                curl -sf -u "\$SONAR_TOKEN:" \
+                                "${env.SONAR_HOST_URL}/api/ce/task?id=${taskId}"
+                            """,
+                            returnStdout: true
+                        ).trim()
 
-                    echo "Attempt ${retries}/${maxRetries} — Status: ${status}"
+                        def json = readJSON text: response
+                        def status = json.task.status
+
+                        echo "Task status: ${status}"
+
+                        // keep looping until finished
+                        if (status in ['PENDING', 'IN_PROGRESS']) {
+                            return false
+                        }
+
+                        // FAIL conditions
+                        if (status != 'SUCCESS') {
+                            error "❌ Sonar task failed: ${status}"
+                        }
+
+                        // SUCCESS → now check Quality Gate
+                        def analysisId = json.task.analysisId
+
+                        def gateResponse = sh(
+                            script: """
+                                curl -sf -u "\$SONAR_TOKEN:" \
+                                "${env.SONAR_HOST_URL}/api/qualitygates/project_status?analysisId=${analysisId}"
+                            """,
+                            returnStdout: true
+                        ).trim()
+
+                        def gateStatus = readJSON(text: gateResponse).projectStatus.status
+
+                        echo "Quality Gate: ${gateStatus}"
+
+                        if (gateStatus != 'OK') {
+                            error "❌ Quality Gate FAILED"
+                        }
+
+                        echo "✅ Quality Gate PASSED"
+                        return true
+                    }
                 }
-
-                if (status != 'SUCCESS') {
-                    error "❌ Sonar task failed or timeout — status: ${status}"
-                }
-
-                echo "✅ Sonar task completed"
             }
         }
     }
 }
-
         // ─────────────────────────────────────────────────────
         // STAGE 7 — Docker Build
         // ─────────────────────────────────────────────────────
