@@ -183,41 +183,51 @@ pipeline {
         stage('Stage 6 | Quality Gate — HARD STOP') {
     steps {
         script {
-            def taskId = readFile('car-backend/.scannerwork/report-task.txt')
+
+            // ✅ Correct path (important)
+            def reportFile = 'car-backend/.scannerwork/report-task.txt'
+
+            def taskId = readFile(reportFile)
                 .split('\n')
                 .find { it.startsWith('ceTaskId=') }
                 ?.replace('ceTaskId=', '')
                 ?.trim()
 
             if (!taskId) {
-                error("❌ Could not read ceTaskId from report-task.txt")
+                error "❌ ceTaskId not found in ${reportFile}"
             }
 
             echo "🔎 Polling SonarQube task: ${taskId}"
 
             withCredentials([string(credentialsId: 'sonar-token', variable: 'SONAR_TOKEN')]) {
 
-                timeout(time: 5, unit: 'MINUTES') {
-                    waitUntil {
-                        sleep(time: 10, unit: 'SECONDS')
+                def status = 'PENDING'
+                int retries = 0
+                int maxRetries = 30
 
-                        def result = sh(
-                            script: '''
-                                curl -sf -u "$SONAR_TOKEN:" \
-                                "$SONAR_HOST_URL/api/ce/task?id=$TASK_ID"
-                            ''',
-                            returnStdout: true,
-                            environment: [
-                                "TASK_ID=" + taskId
-                            ]
-                        ).trim()
+                while (status in ['PENDING', 'IN_PROGRESS'] && retries < maxRetries) {
+                    sleep 10
+                    retries++
 
-                        def status = readJSON(text: result).task.status
-                        echo "Task status: ${status}"
+                    def response = sh(
+                        script: """
+                            curl -sf -u "\$SONAR_TOKEN:" \
+                            "${env.SONAR_HOST_URL}/api/ce/task?id=${taskId}"
+                        """,
+                        returnStdout: true
+                    ).trim()
 
-                        return status in ['SUCCESS', 'FAILED', 'CANCELLED']
-                    }
+                    def json = readJSON text: response
+                    status = json.task.status
+
+                    echo "Attempt ${retries}/${maxRetries} — Status: ${status}"
                 }
+
+                if (status != 'SUCCESS') {
+                    error "❌ Sonar task failed or timeout — status: ${status}"
+                }
+
+                echo "✅ Sonar task completed"
             }
         }
     }
