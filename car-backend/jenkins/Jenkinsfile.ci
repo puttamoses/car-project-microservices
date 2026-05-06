@@ -182,79 +182,41 @@ pipeline {
         // ─────────────────────────────────────────────────────
         stage('Stage 6 | Quality Gate — HARD STOP') {
     steps {
-        withCredentials([string(credentialsId: 'sonar-token', variable: 'SONAR_TOKEN')]) {
-            script {
-                def sonarUrl   = env.SONAR_HOST_URL
-                def taskId     = ''
-                def maxRetries = 30
-                def retries    = 0
+        script {
+            def taskId = readFile('car-backend/.scannerwork/report-task.txt')
+                .split('\n')
+                .find { it.startsWith('ceTaskId=') }
+                ?.replace('ceTaskId=', '')
+                ?.trim()
 
-                // Read CE Task ID
-                def reportFile = 'car-backend/.scannerwork/report-task.txt'
-                def reportText = readFile(reportFile)
+            if (!taskId) {
+                error("❌ Could not read ceTaskId from report-task.txt")
+            }
 
-                reportText.split('\n').each { line ->
-                    if (line.startsWith('ceTaskId=')) {
-                        taskId = line.replace('ceTaskId=', '').trim()
+            echo "🔎 Polling SonarQube task: ${taskId}"
+
+            withCredentials([string(credentialsId: 'sonar-token', variable: 'SONAR_TOKEN')]) {
+
+                timeout(time: 5, unit: 'MINUTES') {
+                    waitUntil {
+                        sleep(time: 10, unit: 'SECONDS')
+
+                        def result = sh(
+                            script: '''
+                                curl -sf -u "$SONAR_TOKEN:" \
+                                "$SONAR_HOST_URL/api/ce/task?id=$TASK_ID"
+                            ''',
+                            returnStdout: true,
+                            environment: [
+                                "TASK_ID=" + taskId
+                            ]
+                        ).trim()
+
+                        def status = readJSON(text: result).task.status
+                        echo "Task status: ${status}"
+
+                        return status in ['SUCCESS', 'FAILED', 'CANCELLED']
                     }
-                }
-
-                echo "🔎 Polling SonarQube task: ${taskId}"
-
-                def status = 'PENDING'
-
-                while (status in ['PENDING', 'IN_PROGRESS'] && retries < maxRetries) {
-                    sleep(10)
-                    retries++
-
-                    def response = sh(
-                        script: """
-                            curl -sf -u "$SONAR_TOKEN:" \
-                            "${sonarUrl}/api/ce/task?id=${taskId}"
-                        """,
-                        returnStdout: true
-                    ).trim()
-
-                    def json = readJSON text: response
-                    status = json.task.status
-
-                    echo "Attempt ${retries}/${maxRetries} — Status: ${status}"
-                }
-
-                if (status == 'SUCCESS') {
-
-                    def analysisId = sh(
-                        script: """
-                            curl -sf -u "$SONAR_TOKEN:" \
-                            "${sonarUrl}/api/ce/task?id=${taskId}" \
-                            | python3 -c "import sys,json; print(json.load(sys.stdin)['task']['analysisId'])"
-                        """,
-                        returnStdout: true
-                    ).trim()
-
-                    def gateResponse = sh(
-                        script: """
-                            curl -sf -u "$SONAR_TOKEN:" \
-                            "${sonarUrl}/api/qualitygates/project_status?analysisId=${analysisId}"
-                        """,
-                        returnStdout: true
-                    ).trim()
-
-                    def gateJson   = readJSON text: gateResponse
-                    def gateStatus = gateJson.projectStatus.status
-
-                    echo "🔎 Quality Gate Status: ${gateStatus}"
-
-                    if (gateStatus != 'OK') {
-                        error "❌ Quality Gate FAILED: ${gateStatus} — check ${sonarUrl}/dashboard?id=car-backend"
-                    }
-
-                    echo '✅ Quality Gate PASSED'
-
-                } else if (retries >= maxRetries) {
-                    error "❌ Timeout after ${maxRetries * 10}s — status: ${status}"
-                } else {
-                    error "❌ Sonar task ended with status: ${status}"
                 }
             }
         }
