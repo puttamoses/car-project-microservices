@@ -112,12 +112,14 @@ pipeline {
                     '--exclude **/node_modules/**',
                     '--exclude **/coverage/**',
                     '--exclude **/dependency-check-report/**',
-                    '--format XML',          // ← start with just XML to reduce noise
+                    '--format XML',
+                    '--format HTML',
+                    '--format JSON',
                     '--out dependency-check-report',
                     '--failOnCVSS 9',
                     '--disableAssembly',
-                    '--disableNodeAudit',
-                    '--nvdApiKey YOUR_NVD_API_KEY'  // ← critical for DC 9.x+
+                    '--disableNodeAudit'
+                    // ← NO --nvdApiKey for DC 8.x
                 ].join(' '),
                 odcInstallation: 'OWASP-DC'
             )
@@ -125,16 +127,13 @@ pipeline {
     }
     post {
         always {
-            // Confirm the file exists before publishing
-            sh 'ls -la car-backend/dependency-check-report/ || echo "REPORT DIR MISSING"'
             dependencyCheckPublisher(
                 pattern: 'car-backend/dependency-check-report/dependency-check-report.xml',
-                stopBuild: false   // ← don't let publisher failure kill the build
+                stopBuild: false
             )
         }
     }
 }
-
         // ─────────────────────────────────────────────────────
         // STAGE 5 — SAST (SonarQube Scan)
         //
