@@ -217,17 +217,17 @@ pipeline {
 
                         echo "Task status: ${status}"
 
-                        // keep looping until finished
-                        if (status in ['PENDING', 'IN_PROGRESS']) {
+                        // 🔁 KEEP LOOPING
+                        if (status == 'PENDING' || status == 'IN_PROGRESS') {
                             return false
                         }
 
-                        // FAIL conditions
+                        // ❌ FAIL if Sonar failed
                         if (status != 'SUCCESS') {
                             error "❌ Sonar task failed: ${status}"
                         }
 
-                        // SUCCESS → now check Quality Gate
+                        // ✅ SUCCESS → check Quality Gate
                         def analysisId = json.task.analysisId
 
                         def gateResponse = sh(
@@ -247,7 +247,8 @@ pipeline {
                         }
 
                         echo "✅ Quality Gate PASSED"
-                        return true
+
+                        return true   // 🛑 STOP LOOP
                     }
                 }
             }
