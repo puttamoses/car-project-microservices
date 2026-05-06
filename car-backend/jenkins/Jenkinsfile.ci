@@ -212,22 +212,28 @@ pipeline {
                             returnStdout: true
                         ).trim()
 
+                        echo "RAW RESPONSE: ${response}"
+
                         def json = readJSON text: response
-                        def status = json.task.status
+                        def status = json?.task?.status
 
                         echo "Task status: ${status}"
 
-                        // 🔁 LOOP CONTROL (CRITICAL)
+                        // 🔁 KEEP LOOPING
                         if (status == 'PENDING' || status == 'IN_PROGRESS') {
-                            return false   // ← MUST BE HERE
+                            return false
                         }
 
-                        // ❌ FAIL CASE
+                        // ❌ FAIL SAFE
+                        if (!status) {
+                            error "❌ Could not parse Sonar response"
+                        }
+
                         if (status != 'SUCCESS') {
                             error "❌ Sonar task failed: ${status}"
                         }
 
-                        // ✅ SUCCESS → Quality Gate
+                        // ✅ SUCCESS
                         def analysisId = json.task.analysisId
 
                         def gateResponse = sh(
@@ -248,7 +254,7 @@ pipeline {
 
                         echo "✅ Quality Gate PASSED"
 
-                        return true   // ← MUST BE LAST LINE
+                        return true
                     }
                 }
             }
