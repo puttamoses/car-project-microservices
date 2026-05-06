@@ -100,23 +100,38 @@ pipeline {
         //    → Dependency-Check → Add → Name: OWASP-DC
         //    → Install automatically ✅ → Save
         // ─────────────────────────────────────────────────────
+        // STAGE 4 — SCA (OWASP Dependency-Check)
+        //
+        // IMPORTANT: dependencyCheck() plugin step always runs
+        // from WORKSPACE root — it ignores dir() context.
+        // Must use absolute paths for --scan and --out.
+        //
+        // Uses Jenkins Global Tool (OWASP-DC) — no manual install.
+        // ✅ One-time: Manage Jenkins → Global Tool Configuration
+        //    → Dependency-Check → Add → Name: OWASP-DC
+        //    → Install automatically ✅ → Save
+        // ─────────────────────────────────────────────────────
         stage('Stage 4 | SCA — OWASP Dependency-Check') {
             steps {
-                dir('car-backend') {
-                    sh 'mkdir -p dependency-check-report'
+                script {
+                    def reportDir = "${WORKSPACE}/dependency-check-report"
+                    def scanDir   = "${WORKSPACE}/car-backend"
+                    sh "mkdir -p ${reportDir}"
                     dependencyCheck(
                         additionalArguments: [
-                            '--project car-backend',
-                            '--scan .',
-                            '--exclude **/.git/**',
-                            '--exclude **/node_modules/**',
-                            '--exclude **/coverage/**',
-                            '--exclude **/dependency-check-report/**',
-                            '--format ALL',
-                            '--out dependency-check-report',
-                            '--failOnCVSS 9',
-                            '--disableAssembly',
-                            '--disableNodeAudit'
+                            "--project car-backend",
+                            "--scan ${scanDir}",
+                            "--exclude **/.git/**",
+                            "--exclude **/node_modules/**",
+                            "--exclude **/coverage/**",
+                            "--exclude **/dependency-check-report/**",
+                            "--format XML",
+                            "--format HTML",
+                            "--format JSON",
+                            "--out ${reportDir}",
+                            "--failOnCVSS 9",
+                            "--disableAssembly",
+                            "--disableNodeAudit"
                         ].join(' '),
                         odcInstallation: 'OWASP-DC'
                     )
@@ -125,17 +140,12 @@ pipeline {
             post {
                 always {
                     dependencyCheckPublisher(
-                        pattern: 'car-backend/dependency-check-report/dependency-check-report.xml'
+                        pattern: 'dependency-check-report/dependency-check-report.xml'
                     )
                 }
             }
         }
 
-        // ─────────────────────────────────────────────────────
-        // STAGE 5 — SAST (SonarQube Scan)
-        //
-        // Sends source code + coverage + OWASP report to SonarQube.
-        // Does NOT wait for result here — that is Stage 6.
         // ─────────────────────────────────────────────────────
         stage('Stage 5 | SAST — SonarQube Scan') {
             steps {
@@ -151,8 +161,8 @@ pipeline {
                                 -Dsonar.tests=. \
                                 -Dsonar.test.inclusions=**/*.test.js \
                                 -Dsonar.javascript.lcov.reportPaths=coverage/lcov.info \
-                                -Dsonar.dependencyCheck.jsonReportPath=dependency-check-report/dependency-check-report.json \
-                                -Dsonar.dependencyCheck.htmlReportPath=dependency-check-report/dependency-check-report.html \
+                                -Dsonar.dependencyCheck.jsonReportPath=${WORKSPACE}/dependency-check-report/dependency-check-report.json \
+                                -Dsonar.dependencyCheck.htmlReportPath=${WORKSPACE}/dependency-check-report/dependency-check-report.html \
                                 -Dsonar.host.url=${SONAR_HOST_URL} \
                                 -Dsonar.login=${SONAR_TOKEN}
                         '''
@@ -363,7 +373,7 @@ pipeline {
                         aws s3 cp trivy-report.json \
                             s3://${S3_BUCKET}/${REPORT_PATH}/trivy-report.json || true
 
-                        aws s3 cp car-backend/dependency-check-report/ \
+                        aws s3 cp dependency-check-report/ \
                             s3://${S3_BUCKET}/${REPORT_PATH}/sca/ --recursive || true
 
                         aws s3 cp car-backend/coverage/lcov.info \
