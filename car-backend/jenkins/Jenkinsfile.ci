@@ -4,8 +4,8 @@
 //  Stage 1  — Checkout
 //  Stage 2  — Build
 //  Stage 3  — Test + Coverage
-//  Stage 4  — SCA — OWASP Dependency-Check
-//  Stage 5  — SAST — SonarQube Scan
+//  Stage 4  — SCA  (OWASP Dependency-Check)
+//  Stage 5  — SAST (SonarQube Scan)
 //  Stage 6  — Quality Gate (HARD STOP)
 //  Stage 7  — Docker Build
 //  Stage 8  — Trivy Image Scan (HARD STOP)
@@ -24,8 +24,8 @@ pipeline {
 
     environment {
         SONAR_HOST_URL = 'http://13.200.38.79:9000'   // ✅ your SonarQube URL
-        AWS_REGION     = 'ap-south-1'                  // ✅ your AWS region
-        S3_BUCKET      = 'your-reports-bucket'         // ✅ your S3 bucket name
+        AWS_REGION     = 'ap-south-1'                 // ✅ your AWS region
+        S3_BUCKET      = 'your-reports-bucket'        // ✅ your S3 bucket name
 
         SONAR_TOKEN    = credentials('sonar-token')
         AWS_ACCOUNT_ID = credentials('aws-account-id')
@@ -50,7 +50,6 @@ pipeline {
             steps {
                 checkout scm
                 sh 'git log -1 --oneline'
-                echo "Branch: ${env.BRANCH_NAME}"
             }
         }
 
@@ -76,7 +75,6 @@ pipeline {
                             --coverage \
                             --coverageReporters=lcov \
                             --coverageReporters=text \
-                            --coverageReporters=clover \
                             --forceExit \
                             --ci
                     '''
@@ -102,11 +100,11 @@ pipeline {
         // STAGE 4 — SCA (OWASP Dependency-Check)
         //
         // dependencyCheck() always runs from WORKSPACE root
-        // regardless of dir() — so absolute paths required.
+        // regardless of dir() — must use absolute paths.
         //
         // ✅ Jenkins setup:
         //    Manage Jenkins → Global Tool Configuration
-        //    → Dependency-Check → Name: OWASP-DC → Install auto ✅
+        //    → Dependency-Check → Name: OWASP-DC → Install automatically
         // ─────────────────────────────────────────────────────
         stage('Stage 4 | SCA — OWASP Dependency-Check') {
             steps {
@@ -138,8 +136,7 @@ pipeline {
             post {
                 always {
                     dependencyCheckPublisher(
-                        pattern  : 'dependency-check-report/dependency-check-report.xml',
-                        stopBuild: false
+                        pattern: 'dependency-check-report/dependency-check-report.xml'
                     )
                 }
             }
@@ -148,8 +145,7 @@ pipeline {
         // ─────────────────────────────────────────────────────
         // STAGE 5 — SAST (SonarQube Scan)
         //
-        // Scans source code for security issues, bugs, smells.
-        // Imports OWASP report and Jest coverage.
+        // Sends source code + coverage + OWASP JSON to SonarQube.
         // Does NOT wait for result here — Stage 6 does that.
         // ─────────────────────────────────────────────────────
         stage('Stage 5 | SAST — SonarQube Scan') {
@@ -178,89 +174,74 @@ pipeline {
         // STAGE 6 — Quality Gate (HARD STOP)
         //
         // Reads ceTaskId from .scannerwork/report-task.txt
-        // Polls SonarQube API every 10 seconds until task done.
-        // Then checks Quality Gate status.
-        // Pipeline fails here if gate is not OK.
+        // Polls SonarQube API every 10s until task finishes
+        // Then checks Quality Gate status
+        // Fails pipeline if gate is not OK
         //
-        // Key rules for waitUntil:
-        //   return false → keep looping
-        //   return true  → stop loop (done)
-        //   error(...)   → fail pipeline
-        //
-        // Secret ($SONAR_TOKEN) passed via withCredentials.
-        // Groovy vars (taskId, analysisId) used in """ strings.
-        // $SONAR_TOKEN used in shell with \$ to avoid interpolation.
+        // Uses $SONAR_TOKEN safely in shell (no Groovy interpolation)
+        // Uses ${taskId} in Groovy (not a secret, safe to interpolate)
         // ─────────────────────────────────────────────────────
         stage('Stage 6 | Quality Gate — HARD STOP') {
             steps {
                 script {
                     // Read task ID written by sonar-scanner
-                    def reportFile = 'car-backend/.scannerwork/report-task.txt'
-                    def taskId = readFile(reportFile)
+                    def reportTaskFile = 'car-backend/.scannerwork/report-task.txt'
+                    def taskId = readFile(reportTaskFile)
                         .split('\n')
                         .find { it.startsWith('ceTaskId=') }
                         ?.replace('ceTaskId=', '')
                         ?.trim()
 
                     if (!taskId) {
-                        error "ceTaskId not found in ${reportFile}"
+                        error "ceTaskId not found in ${reportTaskFile}"
                     }
 
                     echo "Polling SonarQube task: ${taskId}"
 
                     withCredentials([string(credentialsId: 'sonar-token', variable: 'SONAR_TOKEN')]) {
 
-                        timeout(time: 5, unit: 'MINUTES') {
+                        def sonarUrl   = env.SONAR_HOST_URL
+                        def maxWaitSec = 300   // 5 minutes
+                        def waited     = 0
+                        def status     = ''
 
-                            waitUntil {
-                                sleep 10
+                        // Poll until task is no longer PENDING or IN_PROGRESS
+                        while (waited < maxWaitSec) {
+                            sleep 10
+                            waited += 10
 
-                                // curl with \$SONAR_TOKEN (shell expands) + ${taskId} (Groovy expands)
-                                def response = sh(
-                                    script: """
-                                        curl -sf \
-                                            -u "\$SONAR_TOKEN:" \
-                                            "${env.SONAR_HOST_URL}/api/ce/task?id=${taskId}"
-                                    """,
-                                    returnStdout: true
-                                ).trim()
+                            def raw = sh(
+                                script: """curl -sf -u "\$SONAR_TOKEN:" "${sonarUrl}/api/ce/task?id=${taskId}" """,
+                                returnStdout: true
+                            ).trim()
 
-                                def status = readJSON(text: response).task.status
-                                echo "Task status: ${status}"
+                            status = readJSON(text: raw).task.status
+                            echo "Attempt ${waited/10} — Status: ${status}"
 
-                                // Still running — keep looping
-                                if (status == 'PENDING' || status == 'IN_PROGRESS') {
-                                    return false
-                                }
-
-                                // Task failed on Sonar side
-                                if (status != 'SUCCESS') {
-                                    error "SonarQube task failed with status: ${status}"
-                                }
-
-                                // Task done — now check Quality Gate
-                                def analysisId = readJSON(text: response).task.analysisId
-
-                                def gateResp = sh(
-                                    script: """
-                                        curl -sf \
-                                            -u "\$SONAR_TOKEN:" \
-                                            "${env.SONAR_HOST_URL}/api/qualitygates/project_status?analysisId=${analysisId}"
-                                    """,
-                                    returnStdout: true
-                                ).trim()
-
-                                def gateStatus = readJSON(text: gateResp).projectStatus.status
-                                echo "Quality Gate: ${gateStatus}"
-
-                                if (gateStatus != 'OK') {
-                                    error "Quality Gate FAILED (${gateStatus}) — see ${env.SONAR_HOST_URL}/dashboard?id=car-backend"
-                                }
-
-                                echo "Quality Gate PASSED"
-                                return true  // Stop loop
+                            if (!(status in ['PENDING', 'IN_PROGRESS'])) {
+                                break
                             }
                         }
+
+                        // Check final status
+                        if (status != 'SUCCESS') {
+                            error "SonarQube task failed or timed out — final status: ${status}"
+                        }
+
+                        // Get Quality Gate result
+                        def gateRaw = sh(
+                            script: """curl -sf -u "\$SONAR_TOKEN:" "${sonarUrl}/api/qualitygates/project_status?projectKey=car-backend" """,
+                            returnStdout: true
+                        ).trim()
+
+                        def gateStatus = readJSON(text: gateRaw).projectStatus.status
+                        echo "Quality Gate: ${gateStatus}"
+
+                        if (gateStatus != 'OK') {
+                            error "Quality Gate FAILED: ${gateStatus} — check ${sonarUrl}/dashboard?id=car-backend"
+                        }
+
+                        echo 'Quality Gate PASSED'
                     }
                 }
             }
@@ -283,11 +264,9 @@ pipeline {
         // ─────────────────────────────────────────────────────
         // STAGE 8 — Trivy Image Scan (HARD STOP)
         //
-        // Scans Docker image for OS + lib CVEs.
+        // Scans Docker image for OS + library CVEs.
+        // --ignore-unfixed skips CVEs with no fix yet (reduces noise).
         // Fails on HIGH or CRITICAL.
-        //
-        // ✅ Install Trivy on Jenkins agent:
-        //    curl -sfL https://raw.githubusercontent.com/aquasecurity/trivy/main/contrib/install.sh | sh -s -- -b /usr/local/bin
         // ─────────────────────────────────────────────────────
         stage('Stage 8 | Trivy Image Scan — HARD STOP') {
             steps {
@@ -300,6 +279,7 @@ pipeline {
                         --format json \
                         --output trivy-report.json \
                         ${IMAGE_URI}
+
                     echo "Trivy scan passed"
                 '''
             }
@@ -322,9 +302,12 @@ pipeline {
                         -p 5000:5000 \
                         -e PORT=5000 \
                         ${IMAGE_URI}
+
                     sleep 10
+
                     curl -f http://localhost:5000/health   || exit 1
                     curl -f http://localhost:5000/api/cars || exit 1
+
                     echo "Smoke test passed"
                 '''
             }
