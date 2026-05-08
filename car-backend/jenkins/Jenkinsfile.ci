@@ -108,17 +108,7 @@ pipeline {
 
             dependencyCheck(
                 odcInstallation: 'OWASP-DC',
-                additionalArguments: '''
-                    --project car-backend
-                    --scan .
-                    --exclude **/.git/**
-                    --exclude **/node_modules/**
-                    --exclude **/coverage/**
-                    --format ALL
-                    --out dependency-check-report
-                    --disableAssembly
-                    --disableNodeAudit
-                '''
+                additionalArguments: '--project car-backend --scan . --exclude "**/.git/**" --exclude "**/node_modules/**" --exclude "**/coverage/**" --exclude "**/dependency-check-report/**" --format XML --format HTML --format JSON --out dependency-check-report --failOnCVSS 9 --disableAssembly --disableNodeAudit'
             )
 
             // DEBUG (must show file)

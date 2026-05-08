@@ -140,35 +140,16 @@ pipeline {
         // ─────────────────────────────────────────────────────
         stage('Stage 4 | SCA — OWASP Dependency-Check') {
             steps {
-                script {
-                    def reportDir = "${WORKSPACE}/dependency-check-report"
-                    def scanDir   = "${WORKSPACE}/car-frontend"
-                    sh "mkdir -p ${reportDir}"
-                    dependencyCheck(
-                        additionalArguments: [
-                            "--project car-frontend",
-                            "--scan ${scanDir}",
-                            "--exclude **/.git/**",
-                            "--exclude **/node_modules/**",
-                            "--exclude **/build/**",
-                            "--exclude **/coverage/**",
-                            "--exclude **/dependency-check-report/**",
-                            "--format XML",
-                            "--format HTML",
-                            "--format JSON",
-                            "--out ${reportDir}",
-                            "--failOnCVSS 9",
-                            "--disableAssembly",
-                            "--disableNodeAudit"
-                        ].join(' '),
-                        odcInstallation: 'OWASP-DC'
-                    )
-                }
+                sh 'mkdir -p dependency-check-report'
+                dependencyCheck(
+                    odcInstallation: 'OWASP-DC',
+                    additionalArguments: '--project car-frontend --scan . --exclude "**/.git/**" --exclude "**/node_modules/**" --exclude "**/build/**" --exclude "**/coverage/**" --exclude "**/dependency-check-report/**" --format XML --format HTML --format JSON --out dependency-check-report --failOnCVSS 9 --disableAssembly --disableNodeAudit'
+                )
             }
             post {
                 always {
                     dependencyCheckPublisher(
-                        pattern: 'dependency-check-report/dependency-check-report.xml'
+                        pattern: 'car-frontend/dependency-check-report/dependency-check-report.xml'
                     )
                 }
             }
