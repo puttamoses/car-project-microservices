@@ -4,14 +4,19 @@
 //  Stage 1  — Checkout
 //  Stage 2  — Build
 //  Stage 3  — Test + Coverage
-//  Stage 4  — SCA — OWASP Dependency-Check
-//  Stage 5  — SAST — SonarQube Scan
-//  Stage 6  — Quality Gate (HARD STOP)
+//  Stage 4  — SCA  (OWASP Dependency-Check)
+//  Stage 5  — SAST (SonarQube)
+//  Stage 6  — Quality Gate HARD STOP
 //  Stage 7  — Docker Build
-//  Stage 8  — Trivy Image Scan (HARD STOP)
+//  Stage 8  — Trivy Scan HARD STOP
 //  Stage 9  — Smoke Test
 //  Stage 10 — Push to ECR
 //  Stage 11 — Upload Reports to S3
+//
+//  ✅ Jenkins one-time setup:
+//    Global Tool Config → NodeJS-20, OWASP-DC
+//    Configure System   → SonarQube server named "SonarQube"
+//    Credentials        → sonar-token, aws-credentials, aws-account-id
 // ─────────────────────────────────────────────────────────────
 
 pipeline {
@@ -23,9 +28,9 @@ pipeline {
     }
 
     environment {
-        SONAR_HOST_URL = 'http://13.200.38.79:9000'   // ✅ your SonarQube URL
-        AWS_REGION     = 'ap-south-1'                 // ✅ your AWS region
-        S3_BUCKET      = 'your-reports-bucket'        // ✅ your S3 bucket name
+        SONAR_HOST_URL = 'http://13.200.38.79:9000'
+        AWS_REGION     = 'ap-south-1'
+        S3_BUCKET      = 'your-reports-bucket'
 
         SONAR_TOKEN    = credentials('sonar-token')
         AWS_ACCOUNT_ID = credentials('aws-account-id')
@@ -55,6 +60,8 @@ pipeline {
 
         // ─────────────────────────────────────────────────────
         // STAGE 2 — Build
+        // npm install generates package-lock.json which OWASP
+        // Dependency-Check needs to scan dependencies properly
         // ─────────────────────────────────────────────────────
         stage('Stage 2 | Build') {
             steps {
@@ -66,11 +73,23 @@ pipeline {
 
         // ─────────────────────────────────────────────────────
         // STAGE 3 — Test + Coverage
+        //
+        // collectCoverageFrom in package.json → app.js only
+        // Generates coverage/lcov.info → imported by SonarQube
+        // Generates coverage/junit.xml → Jenkins test chart
         // ─────────────────────────────────────────────────────
         stage('Stage 3 | Test & Coverage') {
             steps {
                 dir('car-backend') {
-                    sh 'npm test -- --coverage --ci --forceExit'
+                    sh '''
+                        npm test -- \
+                            --coverage \
+                            --coverageReporters=lcov \
+                            --coverageReporters=text \
+                            --coverageReporters=clover \
+                            --forceExit \
+                            --ci
+                    '''
                 }
             }
             post {
@@ -92,165 +111,132 @@ pipeline {
         // ─────────────────────────────────────────────────────
         // STAGE 4 — SCA (OWASP Dependency-Check)
         //
-        // FIX: mkdir -p before running so --out path exists
-        // Uses Jenkins Global Tool (OWASP-DC) — no manual install
+        // IMPORTANT FACTS about dependencyCheck() Jenkins step:
+        //   - Always runs relative to WORKSPACE root
+        //   - dir() context does NOT affect it
+        //   - --scan path must be relative to WORKSPACE
+        //   - --out path must be relative to WORKSPACE
+        //   - mkdir MUST be done before calling it
         //
-        // ✅ One-time Jenkins setup:
-        //    Manage Jenkins → Global Tool Configuration
-        //    → Dependency-Check → Add → Name: OWASP-DC
-        //    → Install automatically ✅ → Save
+        // Generates:
+        //   car-backend/dependency-check-report/
+        //     dependency-check-report.xml  → Jenkins trend chart
+        //     dependency-check-report.html → human readable
+        //     dependency-check-report.json → SonarQube import
         // ─────────────────────────────────────────────────────
         stage('Stage 4 | SCA — OWASP Dependency-Check') {
-    steps {
-        dir('car-backend') {
-
-            sh 'mkdir -p dependency-check-report'
-
-            dependencyCheck(
-                odcInstallation: 'OWASP-DC',
-                additionalArguments: '--project car-backend --scan . --exclude "**/.git/**" --exclude "**/node_modules/**" --exclude "**/coverage/**" --exclude "**/dependency-check-report/**" --format XML --format HTML --format JSON --out dependency-check-report --failOnCVSS 9 --disableAssembly --disableNodeAudit'
-            )
-
-            // DEBUG (must show file)
-            sh 'ls -l dependency-check-report'
+            steps {
+                sh 'mkdir -p car-backend/dependency-check-report'
+                dependencyCheck(
+                    odcInstallation: 'OWASP-DC',
+                    additionalArguments: '--project car-backend --scan car-backend --exclude "**/.git/**" --exclude "**/node_modules/**" --exclude "**/coverage/**" --exclude "**/dependency-check-report/**" --format XML --format HTML --format JSON --out car-backend/dependency-check-report --failOnCVSS 9 --disableAssembly --disableNodeAudit'
+                )
+            }
+            post {
+                always {
+                    dependencyCheckPublisher(
+                        pattern: 'car-backend/dependency-check-report/dependency-check-report.xml'
+                    )
+                }
+            }
         }
-    }
 
-    post {
-        always {
-            dependencyCheckPublisher(
-                pattern: 'car-backend/dependency-check-report/dependency-check-report.xml',
-                stopBuild: false
-            )
-        }
-    }
-}
         // ─────────────────────────────────────────────────────
-        // STAGE 5 — SAST (SonarQube Scan)
+        // STAGE 5 — SAST (SonarQube)
         //
-        // Sends source code + coverage + OWASP report to SonarQube.
-        // Does NOT wait for result here — that is Stage 6.
+        // Scans source code for security issues.
+        // Imports coverage from Stage 3 (lcov.info).
+        // Imports OWASP CVEs from Stage 4 (JSON report).
+        // All visible in one SonarQube dashboard.
+        //
+        // sonar-scanner runs from WORKSPACE root.
+        // Paths below are relative to WORKSPACE.
         // ─────────────────────────────────────────────────────
         stage('Stage 5 | SAST — SonarQube Scan') {
             steps {
-                dir('car-backend') {
-                    withSonarQubeEnv('SonarQube') {
-                        sh '''
-                            npx sonar-scanner \
-                                -Dsonar.projectKey=car-backend \
-                                -Dsonar.projectName="Car Backend" \
-                                -Dsonar.projectVersion=${BUILD_NUMBER} \
-                                -Dsonar.sources=. \
-                                -Dsonar.exclusions=node_modules/**,coverage/**,**/*.test.js,dependency-check-report/** \
-                                -Dsonar.tests=. \
-                                -Dsonar.test.inclusions=**/*.test.js \
-                                -Dsonar.javascript.lcov.reportPaths=coverage/lcov.info \
-                                -Dsonar.dependencyCheck.jsonReportPath=dependency-check-report/dependency-check-report.json \
-                                -Dsonar.dependencyCheck.htmlReportPath=dependency-check-report/dependency-check-report.html \
-                                -Dsonar.host.url=${SONAR_HOST_URL} \
-                                -Dsonar.login=${SONAR_TOKEN}
-                        '''
-                    }
+                withSonarQubeEnv('SonarQube') {
+                    sh '''
+                        cd car-backend && npx sonar-scanner \
+                            -Dsonar.projectKey=car-backend \
+                            -Dsonar.projectName="Car Backend" \
+                            -Dsonar.projectVersion=${BUILD_NUMBER} \
+                            -Dsonar.sources=. \
+                            -Dsonar.exclusions=node_modules/**,coverage/**,**/*.test.js,dependency-check-report/** \
+                            -Dsonar.tests=. \
+                            -Dsonar.test.inclusions=**/*.test.js \
+                            -Dsonar.javascript.lcov.reportPaths=coverage/lcov.info \
+                            -Dsonar.dependencyCheck.jsonReportPath=dependency-check-report/dependency-check-report.json \
+                            -Dsonar.dependencyCheck.htmlReportPath=dependency-check-report/dependency-check-report.html \
+                            -Dsonar.host.url=${SONAR_HOST_URL} \
+                            -Dsonar.login=${SONAR_TOKEN}
+                    '''
                 }
             }
         }
 
         // ─────────────────────────────────────────────────────
-        // STAGE 6 — Quality Gate (HARD STOP)
+        // STAGE 6 — Quality Gate HARD STOP
         //
-        // Polls SonarQube API directly every 10 seconds.
-        // Does NOT rely on webhook — works even without webhook.
+        // Reads task ID from .scannerwork/report-task.txt
+        // Polls SonarQube API every 10s (no webhook needed)
+        // Fails pipeline if gate is not OK
         //
-        // If status != OK → pipeline stops here.
-        // Docker image is NOT built until gate passes.
-        //
-        // ✅ ALSO configure webhook for faster response:
-        //    SonarQube → Administration → Webhooks → Create
-        //    Name: Jenkins
-        //    URL:  http://<jenkins-ip>:8080/sonarqube-webhook/
-        //    Save
+        // Configure webhook for instant response (optional):
+        //   SonarQube → Administration → Webhooks → Create
+        //   Name: Jenkins
+        //   URL:  http://13.204.254.88:8080/sonarqube-webhook/
         // ─────────────────────────────────────────────────────
         stage('Stage 6 | Quality Gate — HARD STOP') {
-    steps {
-        script {
+            steps {
+                script {
+                    // Read taskId from scanner output
+                    def taskId = readFile('car-backend/.scannerwork/report-task.txt')
+                        .split('\n')
+                        .find { it.startsWith('ceTaskId=') }
+                        ?.replace('ceTaskId=', '')
+                        ?.trim()
 
-            def taskId = readFile('car-backend/.scannerwork/report-task.txt')
-                .split('\n')
-                .find { it.startsWith('ceTaskId=') }
-                ?.replace('ceTaskId=', '')
-                ?.trim()
+                    if (!taskId) error('ceTaskId not found in report-task.txt')
+                    echo "Polling SonarQube task: ${taskId}"
 
-            if (!taskId) {
-                error "❌ ceTaskId not found"
-            }
+                    // Poll until done — token is injected as env var via withCredentials
+                    withCredentials([string(credentialsId: 'sonar-token', variable: 'SONAR_TOKEN_VAL')]) {
+                        timeout(time: 10, unit: 'MINUTES') {
+                            waitUntil(initialRecurrencePeriod: 10000) {
+                                def resp = sh(
+                                    script: "curl -sf -u \"\$SONAR_TOKEN_VAL:\" \"${SONAR_HOST_URL}/api/ce/task?id=${taskId}\"",
+                                    returnStdout: true
+                                ).trim()
 
-            echo "🔎 Polling SonarQube task: ${taskId}"
+                                def taskStatus = readJSON(text: resp).task.status
+                                echo "SonarQube task status: ${taskStatus}"
 
-            withCredentials([string(credentialsId: 'sonar-token', variable: 'SONAR_TOKEN')]) {
+                                if (taskStatus == 'PENDING' || taskStatus == 'IN_PROGRESS') return false
+                                if (taskStatus != 'SUCCESS') error("SonarQube task failed: ${taskStatus}")
 
-                timeout(time: 5, unit: 'MINUTES') {
+                                // Task done — check gate
+                                def analysisId = readJSON(text: resp).task.analysisId
+                                def gateResp = sh(
+                                    script: "curl -sf -u \"\$SONAR_TOKEN_VAL:\" \"${SONAR_HOST_URL}/api/qualitygates/project_status?analysisId=${analysisId}\"",
+                                    returnStdout: true
+                                ).trim()
 
-                    waitUntil {
+                                def gateStatus = readJSON(text: gateResp).projectStatus.status
+                                echo "Quality Gate: ${gateStatus}"
 
-                        sleep 10
+                                if (gateStatus != 'OK') {
+                                    error("Quality Gate FAILED: ${gateStatus} — see ${SONAR_HOST_URL}/dashboard?id=car-backend")
+                                }
 
-                        def response = sh(
-                            script: """
-                                curl -sf -u "\$SONAR_TOKEN:" \
-                                "${env.SONAR_HOST_URL}/api/ce/task?id=${taskId}"
-                            """,
-                            returnStdout: true
-                        ).trim()
-
-                        echo "RAW RESPONSE: ${response}"
-
-                        def json = readJSON text: response
-                        def status = json?.task?.status
-
-                        echo "Task status: ${status}"
-
-                        // 🔁 KEEP LOOPING
-                        if (status == 'PENDING' || status == 'IN_PROGRESS') {
-                            return false
+                                echo '✅ Quality Gate PASSED'
+                                return true
+                            }
                         }
-
-                        // ❌ FAIL SAFE
-                        if (!status) {
-                            error "❌ Could not parse Sonar response"
-                        }
-
-                        if (status != 'SUCCESS') {
-                            error "❌ Sonar task failed: ${status}"
-                        }
-
-                        // ✅ SUCCESS
-                        def analysisId = json.task.analysisId
-
-                        def gateResponse = sh(
-                            script: """
-                                curl -sf -u "\$SONAR_TOKEN:" \
-                                "${env.SONAR_HOST_URL}/api/qualitygates/project_status?analysisId=${analysisId}"
-                            """,
-                            returnStdout: true
-                        ).trim()
-
-                        def gateStatus = readJSON(text: gateResponse).projectStatus.status
-
-                        echo "Quality Gate: ${gateStatus}"
-
-                        if (gateStatus != 'OK') {
-                            error "❌ Quality Gate FAILED"
-                        }
-
-                        echo "✅ Quality Gate PASSED"
-
-                        return true
                     }
                 }
             }
         }
-    }
-}
+
         // ─────────────────────────────────────────────────────
         // STAGE 7 — Docker Build
         // ─────────────────────────────────────────────────────
@@ -259,34 +245,39 @@ pipeline {
                 script {
                     env.ECR_REGISTRY = "${AWS_ACCOUNT_ID}.dkr.ecr.${AWS_REGION}.amazonaws.com"
                     env.IMAGE_URI    = "${env.ECR_REGISTRY}/${ECR_REPOSITORY}:${IMAGE_TAG}"
+                    // Set as env so shell steps can use them
+                    sh "docker build -t ${env.IMAGE_URI} car-backend/"
                 }
-                sh 'docker build -t ${IMAGE_URI} car-backend/'
                 echo "Built: ${env.IMAGE_URI}"
             }
         }
 
         // ─────────────────────────────────────────────────────
-        // STAGE 8 — Trivy Image Scan (HARD STOP)
+        // STAGE 8 — Trivy Image Scan HARD STOP
+        //
+        // Catches CVEs in base image + OS packages.
+        // These are NOT caught by OWASP Dependency-Check.
+        // --ignore-unfixed: only fail on CVEs with a fix available
         // ─────────────────────────────────────────────────────
-        stage('Stage 8 | Trivy Image Scan — HARD STOP') {
+        stage('Stage 8 | Trivy Scan — HARD STOP') {
             steps {
-                sh '''
-                    trivy image \
-                        --severity HIGH,CRITICAL \
-                        --exit-code 1 \
-                        --ignore-unfixed \
-                        --no-progress \
-                        --format json \
-                        --output trivy-report.json \
-                        ${IMAGE_URI}
-
-                    echo "✅ Trivy scan passed"
-                '''
+                script {
+                    sh """
+                        trivy image \
+                            --severity HIGH,CRITICAL \
+                            --exit-code 1 \
+                            --ignore-unfixed \
+                            --no-progress \
+                            --format json \
+                            --output trivy-report.json \
+                            ${env.IMAGE_URI}
+                    """
+                }
+                echo '✅ Trivy scan passed'
             }
             post {
                 always {
-                    archiveArtifacts artifacts: 'trivy-report.json',
-                                     allowEmptyArchive: true
+                    archiveArtifacts artifacts: 'trivy-report.json', allowEmptyArchive: true
                 }
             }
         }
@@ -296,20 +287,22 @@ pipeline {
         // ─────────────────────────────────────────────────────
         stage('Stage 9 | Smoke Test') {
             steps {
-                sh '''
-                    docker run -d \
-                        --name backend-smoke-${BUILD_NUMBER} \
-                        -p 5000:5000 \
-                        -e PORT=5000 \
-                        ${IMAGE_URI}
+                script {
+                    sh """
+                        docker run -d \
+                            --name backend-smoke-${BUILD_NUMBER} \
+                            -p 5000:5000 \
+                            -e PORT=5000 \
+                            ${env.IMAGE_URI}
 
-                    sleep 10
+                        sleep 10
 
-                    curl -f http://localhost:5000/health   || exit 1
-                    curl -f http://localhost:5000/api/cars || exit 1
+                        curl -sf http://localhost:5000/health   | grep -q 'ok'   || exit 1
+                        curl -sf http://localhost:5000/api/cars | grep -q 'brand' || exit 1
 
-                    echo "✅ Smoke test passed"
-                '''
+                        echo '✅ Smoke test passed'
+                    """
+                }
             }
             post {
                 always {
@@ -327,27 +320,30 @@ pipeline {
                     $class       : 'AmazonWebServicesCredentialsBinding',
                     credentialsId: 'aws-credentials'
                 ]]) {
-                    sh '''
-                        aws ecr get-login-password --region ${AWS_REGION} | \
-                            docker login \
-                                --username AWS \
-                                --password-stdin \
-                                ${ECR_REGISTRY}
+                    script {
+                        sh """
+                            aws ecr get-login-password --region ${AWS_REGION} | \
+                                docker login \
+                                    --username AWS \
+                                    --password-stdin \
+                                    ${env.ECR_REGISTRY}
 
-                        docker tag ${IMAGE_URI} ${ECR_REGISTRY}/${ECR_REPOSITORY}:latest
+                            docker tag ${env.IMAGE_URI} ${env.ECR_REGISTRY}/${ECR_REPOSITORY}:latest
 
-                        docker push ${IMAGE_URI}
-                        docker push ${ECR_REGISTRY}/${ECR_REPOSITORY}:latest
+                            docker push ${env.IMAGE_URI}
+                            docker push ${env.ECR_REGISTRY}/${ECR_REPOSITORY}:latest
 
-                        echo "✅ Pushed: ${IMAGE_URI}"
-                        echo "${IMAGE_URI}" > /tmp/backend_image_uri.txt
-                    '''
+                            echo ${env.IMAGE_URI} > /tmp/backend_image_uri.txt
+                        """
+                    }
                 }
             }
         }
 
         // ─────────────────────────────────────────────────────
         // STAGE 11 — Upload Reports to S3
+        //
+        // All paths are relative to WORKSPACE.
         // ─────────────────────────────────────────────────────
         stage('Stage 11 | Upload Reports to S3') {
             steps {
@@ -356,18 +352,23 @@ pipeline {
                     credentialsId: 'aws-credentials'
                 ]]) {
                     sh '''
-                        REPORT_PATH="car-backend/build-${BUILD_NUMBER}"
+                        R="car-backend/build-${BUILD_NUMBER}"
 
-                        aws s3 cp trivy-report.json \
-                            s3://${S3_BUCKET}/${REPORT_PATH}/trivy-report.json || true
+                        [ -f trivy-report.json ] && \
+                            aws s3 cp trivy-report.json s3://${S3_BUCKET}/${R}/trivy-report.json \
+                            || echo "trivy-report.json not found, skipping"
 
-                        aws s3 cp car-backend/dependency-check-report/ \
-                            s3://${S3_BUCKET}/${REPORT_PATH}/sca/ --recursive || true
+                        [ -d car-backend/dependency-check-report ] && \
+                            aws s3 cp car-backend/dependency-check-report/ \
+                                s3://${S3_BUCKET}/${R}/sca/ --recursive \
+                            || echo "OWASP report dir not found, skipping"
 
-                        aws s3 cp car-backend/coverage/lcov.info \
-                            s3://${S3_BUCKET}/${REPORT_PATH}/coverage/lcov.info || true
+                        [ -f car-backend/coverage/lcov.info ] && \
+                            aws s3 cp car-backend/coverage/lcov.info \
+                                s3://${S3_BUCKET}/${R}/coverage/lcov.info \
+                            || echo "lcov.info not found, skipping"
 
-                        echo "✅ Reports uploaded to s3://${S3_BUCKET}/${REPORT_PATH}/"
+                        echo "✅ Reports upload complete → s3://${S3_BUCKET}/${R}/"
                     '''
                 }
             }
@@ -378,10 +379,7 @@ pipeline {
     post {
         success {
             script {
-                def imageUri = sh(
-                    script: 'cat /tmp/backend_image_uri.txt',
-                    returnStdout: true
-                ).trim()
+                def imageUri = sh(script: 'cat /tmp/backend_image_uri.txt', returnStdout: true).trim()
                 echo "✅ CI passed — triggering CD with: ${imageUri}"
                 build job: 'car-backend-cd',
                       parameters: [string(name: 'IMAGE_URI', value: imageUri)],
