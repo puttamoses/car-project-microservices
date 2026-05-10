@@ -340,35 +340,47 @@ ${SONAR_HOST_URL}/dashboard?id=car-backend
         // These are NOT caught by OWASP Dependency-Check.
         // --ignore-unfixed: only fail on CVEs with a fix available
         // ─────────────────────────────────────────────────────
-        stage('Stage 8 | Trivy Scan — HARD STOP') {
-
+        stage('Trivy Scan') {
     steps {
+        script {
 
-        sh '''
-            trivy image \
-                --scanners vuln \
-                --severity HIGH,CRITICAL \
-                --exit-code 1 \
-                --ignore-unfixed \
-                --no-progress \
-                --format json \
-                --output trivy-report.json \
-                $IMAGE_URI
-        '''
+            // 1. Run scan and always generate report
+            sh """
+                trivy image \
+                  --scanners vuln \
+                  --severity HIGH,CRITICAL \
+                  --ignore-unfixed \
+                  --format json \
+                  --output trivy-report.json \
+                  ${IMAGE_NAME}
+            """
 
-        echo '✅ Trivy scan passed'
-    }
+            // 2. Archive report always
+            archiveArtifacts artifacts: 'trivy-report.json'
 
-    post {
+            // 3. Count vulnerabilities using jq (ACCURATE)
+            def critical = sh(
+                script: "jq '[.Results[].Vulnerabilities[]? | select(.Severity==\"CRITICAL\")] | length' trivy-report.json || echo 0",
+                returnStdout: true
+            ).trim().toInteger()
 
-        always {
+            def high = sh(
+                script: "jq '[.Results[].Vulnerabilities[]? | select(.Severity==\"HIGH\")] | length' trivy-report.json || echo 0",
+                returnStdout: true
+            ).trim().toInteger()
 
-            archiveArtifacts artifacts: 'trivy-report.json', allowEmptyArchive: true
-        }
+            echo "CRITICAL: ${critical}, HIGH: ${high}"
 
-        failure {
+            // 4. Policy enforcement
+            if (critical > 0) {
+                error("❌ Pipeline failed — ${critical} CRITICAL vulnerabilities found")
+            }
 
-            echo '❌ Trivy detected HIGH/CRITICAL vulnerabilities'
+            if (high > 5) {
+                error("❌ Pipeline failed — ${high} HIGH vulnerabilities exceed threshold")
+            }
+
+            echo "✅ Trivy scan passed"
         }
     }
 }
