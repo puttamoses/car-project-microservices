@@ -127,29 +127,7 @@ pipeline {
         stage('Stage 4 | SCA — OWASP Dependency-Check') {
     steps {
 
-        script {
-
-            // Jenkins Tool Configuration Name
-            def dcHome = tool 'OWASP-DC'
-
-            sh """
-                echo "=============================="
-                echo "OWASP Dependency Check Debug"
-                echo "=============================="
-
-                echo "DC HOME: ${dcHome}"
-
-                java -version
-
-                ls -la ${dcHome}
-
-                ${dcHome}/bin/dependency-check.sh --version
-            """
-        }
-
         dir('car-backend') {
-
-            sh 'pwd && ls -la'
 
             dependencyCheck(
                 odcInstallation: 'OWASP-DC',
@@ -167,13 +145,8 @@ pipeline {
             )
 
             sh '''
-                echo "=============================="
-                echo "Generated Reports"
-                echo "=============================="
-
+                echo "===== Dependency Check Reports ====="
                 find . -name "dependency-check-report*"
-                find . -name "*.xml"
-                find . -name "*.html"
             '''
         }
     }
