@@ -125,21 +125,35 @@ pipeline {
         //     dependency-check-report.json → SonarQube import
         // ─────────────────────────────────────────────────────
         stage('Stage 4 | SCA — OWASP Dependency-Check') {
-            steps {
-                sh 'mkdir -p car-backend/dependency-check-report'
-                dependencyCheck(
-                    odcInstallation: 'OWASP-DC',
-                    additionalArguments: '--project car-backend --scan car-backend --exclude "**/.git/**" --exclude "**/node_modules/**" --exclude "**/coverage/**" --exclude "**/dependency-check-report/**" --format XML --format HTML --format JSON --out car-backend/dependency-check-report --failOnCVSS 9 --disableAssembly --disableNodeAudit'
-                )
-            }
-            post {
-                always {
-                    dependencyCheckPublisher(
-                        pattern: 'car-backend/dependency-check-report/dependency-check-report.xml'
-                    )
-                }
-            }
+    steps {
+
+        dependencyCheck(
+            odcInstallation: 'OWASP-DC',
+            additionalArguments: '''
+                --project car-backend
+                --scan car-backend
+                --exclude "**/.git/**"
+                --exclude "**/node_modules/**"
+                --exclude "**/coverage/**"
+                --format XML
+                --format HTML
+                --format JSON
+                --out ./dependency-check-report
+                --failOnCVSS 9
+                --disableAssembly
+                --disableNodeAudit
+            '''
+        )
+    }
+
+    post {
+        always {
+            dependencyCheckPublisher(
+                pattern: '**/dependency-check-report.xml'
+            )
         }
+    }
+}
 
         // ─────────────────────────────────────────────────────
         // STAGE 5 — SAST (SonarQube)
