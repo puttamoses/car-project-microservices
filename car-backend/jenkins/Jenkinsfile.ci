@@ -238,7 +238,12 @@ pipeline {
 
                     timeout(time: 10, unit: 'MINUTES') {
 
-                        waitUntil(initialRecurrencePeriod: 10000) {
+                        def taskStatus = "PENDING"
+                        def analysisId = ""
+
+                        while (taskStatus == 'PENDING' || taskStatus == 'IN_PROGRESS') {
+
+                            sleep 10
 
                             // Poll CE task status
                             def resp = sh(
@@ -252,52 +257,54 @@ pipeline {
                             echo "CE Task Response: ${resp}"
 
                             def json = readJSON(text: resp)
-                            def taskStatus = json.task.status
+
+                            taskStatus = json.task.status
 
                             echo "SonarQube task status: ${taskStatus}"
 
-                            // Still processing
-                            if (taskStatus == 'PENDING' || taskStatus == 'IN_PROGRESS') {
-                                return false
+                            // Save analysisId once SUCCESS
+                            if (taskStatus == 'SUCCESS') {
+                                analysisId = json.task.analysisId
+                                break
                             }
 
-                            // Failed
-                            if (taskStatus != 'SUCCESS') {
+                            // Fail immediately if analysis failed
+                            if (taskStatus == 'FAILED' || taskStatus == 'CANCELED') {
                                 error("SonarQube task failed: ${taskStatus}")
                             }
+                        }
 
-                            // Task completed
-                            def analysisId = json.task.analysisId
+                        if (!analysisId) {
+                            error("analysisId not found")
+                        }
 
-                            // Get Quality Gate status
-                            def gateResp = sh(
-                                script: """
-                                    curl -s -u "\$SONAR_TOKEN_VAL:" \
-                                    "\$SONAR_HOST_URL/api/qualitygates/project_status?analysisId=${analysisId}"
-                                """,
-                                returnStdout: true
-                            ).trim()
+                        // Get Quality Gate status
+                        def gateResp = sh(
+                            script: """
+                                curl -s -u "\$SONAR_TOKEN_VAL:" \
+                                "\$SONAR_HOST_URL/api/qualitygates/project_status?analysisId=${analysisId}"
+                            """,
+                            returnStdout: true
+                        ).trim()
 
-                            echo "Quality Gate Response: ${gateResp}"
+                        echo "Quality Gate Response: ${gateResp}"
 
-                            def gateJson = readJSON(text: gateResp)
-                            def gateStatus = gateJson.projectStatus.status
+                        def gateJson = readJSON(text: gateResp)
+                        def gateStatus = gateJson.projectStatus.status
 
-                            echo "Quality Gate Status: ${gateStatus}"
+                        echo "Quality Gate Status: ${gateStatus}"
 
-                            // Fail pipeline if gate failed
-                            if (gateStatus != 'OK') {
-                                error("""
+                        // Fail pipeline if gate failed
+                        if (gateStatus != 'OK') {
+                            error("""
 Quality Gate FAILED: ${gateStatus}
 
 Check dashboard:
 ${SONAR_HOST_URL}/dashboard?id=car-backend
-                                """)
-                            }
-
-                            echo '✅ Quality Gate PASSED'
-                            return true
+                            """)
                         }
+
+                        echo '✅ Quality Gate PASSED'
                     }
                 }
             }
