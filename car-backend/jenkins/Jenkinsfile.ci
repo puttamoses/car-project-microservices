@@ -341,47 +341,47 @@ ${SONAR_HOST_URL}/dashboard?id=car-backend
         // --ignore-unfixed: only fail on CVEs with a fix available
         // ─────────────────────────────────────────────────────
         stage('Trivy Scan') {
-    steps {
-        script {
+            steps {
+                script {
+                    def imageUri = env.IMAGE_URI
+                    echo "Scanning image: ${imageUri}"
 
-            echo "🔍 Scanning image: ${env.IMAGE_URI}"
+                    sh """
+                        trivy image \\
+                          --scanners vuln \\
+                          --severity HIGH,CRITICAL \\
+                          --ignore-unfixed \\
+                          --format json \\
+                          --output trivy-report.json \\
+                          ${imageUri}
+                    """
 
-            sh """
-                trivy image \
-                  --scanners vuln \
-                  --severity HIGH,CRITICAL \
-                  --ignore-unfixed \
-                  --format json \
-                  --output trivy-report.json \
-                  ${env.IMAGE_URI}
-            """
+                    archiveArtifacts artifacts: 'trivy-report.json'
 
-            archiveArtifacts artifacts: 'trivy-report.json'
+                    def critical = sh(
+                        script: "jq '[.Results[].Vulnerabilities[]? | select(.Severity==\"CRITICAL\")] | length' trivy-report.json || echo 0",
+                        returnStdout: true
+                    ).trim().toInteger()
 
-            def critical = sh(
-                script: "jq '[.Results[].Vulnerabilities[]? | select(.Severity==\"CRITICAL\")] | length' trivy-report.json || echo 0",
-                returnStdout: true
-            ).trim().toInteger()
+                    def high = sh(
+                        script: "jq '[.Results[].Vulnerabilities[]? | select(.Severity==\"HIGH\")] | length' trivy-report.json || echo 0",
+                        returnStdout: true
+                    ).trim().toInteger()
 
-            def high = sh(
-                script: "jq '[.Results[].Vulnerabilities[]? | select(.Severity==\"HIGH\")] | length' trivy-report.json || echo 0",
-                returnStdout: true
-            ).trim().toInteger()
+                    echo "CRITICAL: ${critical}, HIGH: ${high}"
 
-            echo "CRITICAL: ${critical}, HIGH: ${high}"
+                    if (critical > 0) {
+                        error("CRITICAL vulnerabilities found")
+                    }
 
-            if (critical > 0) {
-                error("❌ CRITICAL vulnerabilities found")
+                    if (high > 5) {
+                        error("Too many HIGH vulnerabilities")
+                    }
+
+                    echo "Trivy scan passed"
+                }
             }
-
-            if (high > 5) {
-                error("❌ Too many HIGH vulnerabilities")
-            }
-
-            echo "✅ Trivy scan passed"
         }
-    }
-}
         // ─────────────────────────────────────────────────────
         // STAGE 9 — Smoke Test
         // ─────────────────────────────────────────────────────
