@@ -211,12 +211,14 @@ pipeline {
         //   URL:  http://13.204.254.88:8080/sonarqube-webhook/
         // ─────────────────────────────────────────────────────
         stage('Stage 6 | Quality Gate — HARD STOP') {
+
     steps {
+
         withSonarQubeEnv('SonarQube') {
 
             script {
 
-                // Read taskId from scanner output
+                // Read SonarQube task ID
                 def taskId = readFile('car-backend/.scannerwork/report-task.txt')
                     .split('\n')
                     .find { it.startsWith('ceTaskId=') }
@@ -230,51 +232,67 @@ pipeline {
                 echo "Polling SonarQube task: ${taskId}"
                 echo "Using Sonar URL: ${SONAR_HOST_URL}"
 
-                withCredentials([string(credentialsId: 'sonar-token', variable: 'SONAR_TOKEN_VAL')]) {
+                withCredentials([
+                    string(credentialsId: 'sonar-token', variable: 'SONAR_TOKEN_VAL')
+                ]) {
 
                     timeout(time: 10, unit: 'MINUTES') {
 
                         waitUntil(initialRecurrencePeriod: 10000) {
 
+                            // Poll CE task status
                             def resp = sh(
                                 script: """
-                                    curl -sf -u "${SONAR_TOKEN_VAL}:" \
-                                    "${SONAR_HOST_URL}/api/ce/task?id=${taskId}"
+                                    curl -s -u "\$SONAR_TOKEN_VAL:" \
+                                    "\$SONAR_HOST_URL/api/ce/task?id=${taskId}"
                                 """,
                                 returnStdout: true
                             ).trim()
+
+                            echo "CE Task Response: ${resp}"
 
                             def json = readJSON(text: resp)
                             def taskStatus = json.task.status
 
                             echo "SonarQube task status: ${taskStatus}"
 
+                            // Still processing
                             if (taskStatus == 'PENDING' || taskStatus == 'IN_PROGRESS') {
                                 return false
                             }
 
+                            // Failed
                             if (taskStatus != 'SUCCESS') {
                                 error("SonarQube task failed: ${taskStatus}")
                             }
 
-                            // Check Quality Gate
+                            // Task completed
                             def analysisId = json.task.analysisId
 
+                            // Get Quality Gate status
                             def gateResp = sh(
                                 script: """
-                                    curl -sf -u "${SONAR_TOKEN_VAL}:" \
-                                    "${SONAR_HOST_URL}/api/qualitygates/project_status?analysisId=${analysisId}"
+                                    curl -s -u "\$SONAR_TOKEN_VAL:" \
+                                    "\$SONAR_HOST_URL/api/qualitygates/project_status?analysisId=${analysisId}"
                                 """,
                                 returnStdout: true
                             ).trim()
 
+                            echo "Quality Gate Response: ${gateResp}"
+
                             def gateJson = readJSON(text: gateResp)
                             def gateStatus = gateJson.projectStatus.status
 
-                            echo "Quality Gate: ${gateStatus}"
+                            echo "Quality Gate Status: ${gateStatus}"
 
+                            // Fail pipeline if gate failed
                             if (gateStatus != 'OK') {
-                                error("Quality Gate FAILED: ${gateStatus}")
+                                error("""
+Quality Gate FAILED: ${gateStatus}
+
+Check dashboard:
+${SONAR_HOST_URL}/dashboard?id=car-backend
+                                """)
                             }
 
                             echo '✅ Quality Gate PASSED'
@@ -286,7 +304,6 @@ pipeline {
         }
     }
 }
-
         // ─────────────────────────────────────────────────────
         // STAGE 7 — Docker Build
         // ─────────────────────────────────────────────────────
