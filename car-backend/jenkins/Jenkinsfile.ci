@@ -210,7 +210,7 @@ pipeline {
         //   Name: Jenkins
         //   URL:  http://13.204.254.88:8080/sonarqube-webhook/
         // ─────────────────────────────────────────────────────
-        stage('Stage 6 | Quality Gate — HARD STOP') {
+            stage('Stage 6 | Quality Gate — HARD STOP') {
 
     steps {
 
@@ -218,7 +218,6 @@ pipeline {
 
             script {
 
-                // Read SonarQube task ID
                 def taskId = readFile('car-backend/.scannerwork/report-task.txt')
                     .split('\n')
                     .find { it.startsWith('ceTaskId=') }
@@ -226,11 +225,10 @@ pipeline {
                     ?.trim()
 
                 if (!taskId) {
-                    error('ceTaskId not found in report-task.txt')
+                    error('ceTaskId not found')
                 }
 
                 echo "Polling SonarQube task: ${taskId}"
-                echo "Using Sonar URL: ${SONAR_HOST_URL}"
 
                 withCredentials([
                     string(credentialsId: 'sonar-token', variable: 'SONAR_TOKEN_VAL')
@@ -238,14 +236,13 @@ pipeline {
 
                     timeout(time: 10, unit: 'MINUTES') {
 
+                        def analysisId = null
                         def taskStatus = "PENDING"
-                        def analysisId = ""
 
-                        while (taskStatus == 'PENDING' || taskStatus == 'IN_PROGRESS') {
+                        while (taskStatus == "PENDING" || taskStatus == "IN_PROGRESS") {
 
-                            sleep 10
+                            sleep(time: 10, unit: 'SECONDS')
 
-                            // Poll CE task status
                             def resp = sh(
                                 script: """
                                     curl -s -u "\$SONAR_TOKEN_VAL:" \
@@ -256,21 +253,19 @@ pipeline {
 
                             echo "CE Task Response: ${resp}"
 
-                            def json = readJSON(text: resp)
+                            def json = readJSON text: resp
 
                             taskStatus = json.task.status
 
-                            echo "SonarQube task status: ${taskStatus}"
+                            echo "Current Task Status: ${taskStatus}"
 
-                            // Save analysisId once SUCCESS
-                            if (taskStatus == 'SUCCESS') {
+                            if (taskStatus == "SUCCESS") {
                                 analysisId = json.task.analysisId
                                 break
                             }
 
-                            // Fail immediately if analysis failed
-                            if (taskStatus == 'FAILED' || taskStatus == 'CANCELED') {
-                                error("SonarQube task failed: ${taskStatus}")
+                            if (taskStatus == "FAILED" || taskStatus == "CANCELED") {
+                                error("SonarQube background task failed: ${taskStatus}")
                             }
                         }
 
@@ -278,7 +273,8 @@ pipeline {
                             error("analysisId not found")
                         }
 
-                        // Get Quality Gate status
+                        echo "Analysis ID: ${analysisId}"
+
                         def gateResp = sh(
                             script: """
                                 curl -s -u "\$SONAR_TOKEN_VAL:" \
@@ -289,28 +285,32 @@ pipeline {
 
                         echo "Quality Gate Response: ${gateResp}"
 
-                        def gateJson = readJSON(text: gateResp)
+                        def gateJson = readJSON text: gateResp
+
                         def gateStatus = gateJson.projectStatus.status
 
                         echo "Quality Gate Status: ${gateStatus}"
 
-                        // Fail pipeline if gate failed
-                        if (gateStatus != 'OK') {
-                            error("""
-Quality Gate FAILED: ${gateStatus}
+                        if (gateStatus != "OK") {
 
-Check dashboard:
+                            error("""
+QUALITY GATE FAILED: ${gateStatus}
+
+Dashboard:
 ${SONAR_HOST_URL}/dashboard?id=car-backend
                             """)
                         }
 
-                        echo '✅ Quality Gate PASSED'
+                        echo "✅ QUALITY GATE PASSED"
                     }
                 }
             }
         }
     }
 }
+
+
+
         // ─────────────────────────────────────────────────────
         // STAGE 7 — Docker Build
         // ─────────────────────────────────────────────────────
