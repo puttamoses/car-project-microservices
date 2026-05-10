@@ -211,55 +211,81 @@ pipeline {
         //   URL:  http://13.204.254.88:8080/sonarqube-webhook/
         // ─────────────────────────────────────────────────────
         stage('Stage 6 | Quality Gate — HARD STOP') {
-            steps {
-                script {
-                    // Read taskId from scanner output
-                    def taskId = readFile('car-backend/.scannerwork/report-task.txt')
-                        .split('\n')
-                        .find { it.startsWith('ceTaskId=') }
-                        ?.replace('ceTaskId=', '')
-                        ?.trim()
+    steps {
+        withSonarQubeEnv('SonarQube') {
 
-                    if (!taskId) error('ceTaskId not found in report-task.txt')
-                    echo "Polling SonarQube task: ${taskId}"
+            script {
 
-                    // Poll until done — token is injected as env var via withCredentials
-                    withCredentials([string(credentialsId: 'sonar-token', variable: 'SONAR_TOKEN_VAL')]) {
-                        timeout(time: 10, unit: 'MINUTES') {
-                            waitUntil(initialRecurrencePeriod: 10000) {
-                                def resp = sh(
-                                    script: "curl -sf -u \"\$SONAR_TOKEN_VAL:\" \"${SONAR_HOST_URL}/api/ce/task?id=${taskId}\"",
-                                    returnStdout: true
-                                ).trim()
+                // Read taskId from scanner output
+                def taskId = readFile('car-backend/.scannerwork/report-task.txt')
+                    .split('\n')
+                    .find { it.startsWith('ceTaskId=') }
+                    ?.replace('ceTaskId=', '')
+                    ?.trim()
 
-                                def taskStatus = readJSON(text: resp).task.status
-                                echo "SonarQube task status: ${taskStatus}"
+                if (!taskId) {
+                    error('ceTaskId not found in report-task.txt')
+                }
 
-                                if (taskStatus == 'PENDING' || taskStatus == 'IN_PROGRESS') return false
-                                if (taskStatus != 'SUCCESS') error("SonarQube task failed: ${taskStatus}")
+                echo "Polling SonarQube task: ${taskId}"
+                echo "Using Sonar URL: ${SONAR_HOST_URL}"
 
-                                // Task done — check gate
-                                def analysisId = readJSON(text: resp).task.analysisId
-                                def gateResp = sh(
-                                    script: "curl -sf -u \"\$SONAR_TOKEN_VAL:\" \"${SONAR_HOST_URL}/api/qualitygates/project_status?analysisId=${analysisId}\"",
-                                    returnStdout: true
-                                ).trim()
+                withCredentials([string(credentialsId: 'sonar-token', variable: 'SONAR_TOKEN_VAL')]) {
 
-                                def gateStatus = readJSON(text: gateResp).projectStatus.status
-                                echo "Quality Gate: ${gateStatus}"
+                    timeout(time: 10, unit: 'MINUTES') {
 
-                                if (gateStatus != 'OK') {
-                                    error("Quality Gate FAILED: ${gateStatus} — see ${SONAR_HOST_URL}/dashboard?id=car-backend")
-                                }
+                        waitUntil(initialRecurrencePeriod: 10000) {
 
-                                echo '✅ Quality Gate PASSED'
-                                return true
+                            def resp = sh(
+                                script: """
+                                    curl -sf -u "${SONAR_TOKEN_VAL}:" \
+                                    "${SONAR_HOST_URL}/api/ce/task?id=${taskId}"
+                                """,
+                                returnStdout: true
+                            ).trim()
+
+                            def json = readJSON(text: resp)
+                            def taskStatus = json.task.status
+
+                            echo "SonarQube task status: ${taskStatus}"
+
+                            if (taskStatus == 'PENDING' || taskStatus == 'IN_PROGRESS') {
+                                return false
                             }
+
+                            if (taskStatus != 'SUCCESS') {
+                                error("SonarQube task failed: ${taskStatus}")
+                            }
+
+                            // Check Quality Gate
+                            def analysisId = json.task.analysisId
+
+                            def gateResp = sh(
+                                script: """
+                                    curl -sf -u "${SONAR_TOKEN_VAL}:" \
+                                    "${SONAR_HOST_URL}/api/qualitygates/project_status?analysisId=${analysisId}"
+                                """,
+                                returnStdout: true
+                            ).trim()
+
+                            def gateJson = readJSON(text: gateResp)
+                            def gateStatus = gateJson.projectStatus.status
+
+                            echo "Quality Gate: ${gateStatus}"
+
+                            if (gateStatus != 'OK') {
+                                error("Quality Gate FAILED: ${gateStatus}")
+                            }
+
+                            echo '✅ Quality Gate PASSED'
+                            return true
                         }
                     }
                 }
             }
         }
+    }
+}
 
         // ─────────────────────────────────────────────────────
         // STAGE 7 — Docker Build
