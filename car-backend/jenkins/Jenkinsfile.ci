@@ -127,7 +127,29 @@ pipeline {
         stage('Stage 4 | SCA — OWASP Dependency-Check') {
     steps {
 
+        script {
+
+            // Jenkins Tool Configuration Name
+            def dcHome = tool 'OWASP-DC'
+
+            sh """
+                echo "=============================="
+                echo "OWASP Dependency Check Debug"
+                echo "=============================="
+
+                echo "DC HOME: ${dcHome}"
+
+                java -version
+
+                ls -la ${dcHome}
+
+                ${dcHome}/bin/dependency-check.sh --version
+            """
+        }
+
         dir('car-backend') {
+
+            sh 'pwd && ls -la'
 
             dependencyCheck(
                 odcInstallation: 'OWASP-DC',
@@ -136,26 +158,36 @@ pipeline {
                     --scan .
                     --format ALL
                     --out ./dependency-check-report
-                    --exclude "**/node_modules/**"
                     --exclude "**/.git/**"
+                    --exclude "**/node_modules/**"
                     --exclude "**/coverage/**"
                     --failOnCVSS 9
                     --disableAssembly
                 '''
             )
+
+            sh '''
+                echo "=============================="
+                echo "Generated Reports"
+                echo "=============================="
+
+                find . -name "dependency-check-report*"
+                find . -name "*.xml"
+                find . -name "*.html"
+            '''
         }
     }
 
     post {
         always {
 
-            sh '''
-                echo "===== Dependency Check Reports ====="
-                find . -name "dependency-check-report*"
-            '''
-
             dependencyCheckPublisher(
                 pattern: '**/dependency-check-report.xml'
+            )
+
+            archiveArtifacts(
+                artifacts: '**/dependency-check-report/**',
+                allowEmptyArchive: true
             )
         }
     }
