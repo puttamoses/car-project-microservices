@@ -344,7 +344,8 @@ ${SONAR_HOST_URL}/dashboard?id=car-backend
     steps {
         script {
 
-            // 1. Run scan and always generate report
+            echo "🔍 Scanning image: ${env.IMAGE_URI}"
+
             sh """
                 trivy image \
                   --scanners vuln \
@@ -352,13 +353,11 @@ ${SONAR_HOST_URL}/dashboard?id=car-backend
                   --ignore-unfixed \
                   --format json \
                   --output trivy-report.json \
-                  ${IMAGE_NAME}
+                  ${env.IMAGE_URI}
             """
 
-            // 2. Archive report always
             archiveArtifacts artifacts: 'trivy-report.json'
 
-            // 3. Count vulnerabilities using jq (ACCURATE)
             def critical = sh(
                 script: "jq '[.Results[].Vulnerabilities[]? | select(.Severity==\"CRITICAL\")] | length' trivy-report.json || echo 0",
                 returnStdout: true
@@ -371,13 +370,12 @@ ${SONAR_HOST_URL}/dashboard?id=car-backend
 
             echo "CRITICAL: ${critical}, HIGH: ${high}"
 
-            // 4. Policy enforcement
             if (critical > 0) {
-                error("❌ Pipeline failed — ${critical} CRITICAL vulnerabilities found")
+                error("❌ CRITICAL vulnerabilities found")
             }
 
             if (high > 5) {
-                error("❌ Pipeline failed — ${high} HIGH vulnerabilities exceed threshold")
+                error("❌ Too many HIGH vulnerabilities")
             }
 
             echo "✅ Trivy scan passed"
