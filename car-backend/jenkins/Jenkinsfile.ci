@@ -341,28 +341,37 @@ ${SONAR_HOST_URL}/dashboard?id=car-backend
         // --ignore-unfixed: only fail on CVEs with a fix available
         // ─────────────────────────────────────────────────────
         stage('Stage 8 | Trivy Scan — HARD STOP') {
-            steps {
-                script {
-                    sh """
-                        trivy image \
-                            --severity HIGH,CRITICAL \
-                            --exit-code 1 \
-                            --ignore-unfixed \
-                            --no-progress \
-                            --format json \
-                            --output trivy-report.json \
-                            ${env.IMAGE_URI}
-                    """
-                }
-                echo '✅ Trivy scan passed'
-            }
-            post {
-                always {
-                    archiveArtifacts artifacts: 'trivy-report.json', allowEmptyArchive: true
-                }
-            }
+
+    steps {
+
+        sh '''
+            trivy image \
+                --scanners vuln \
+                --severity HIGH,CRITICAL \
+                --exit-code 1 \
+                --ignore-unfixed \
+                --no-progress \
+                --format json \
+                --output trivy-report.json \
+                $IMAGE_URI
+        '''
+
+        echo '✅ Trivy scan passed'
+    }
+
+    post {
+
+        always {
+
+            archiveArtifacts artifacts: 'trivy-report.json', allowEmptyArchive: true
         }
 
+        failure {
+
+            echo '❌ Trivy detected HIGH/CRITICAL vulnerabilities'
+        }
+    }
+}
         // ─────────────────────────────────────────────────────
         // STAGE 9 — Smoke Test
         // ─────────────────────────────────────────────────────
