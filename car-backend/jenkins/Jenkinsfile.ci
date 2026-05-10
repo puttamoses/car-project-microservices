@@ -236,12 +236,11 @@ pipeline {
 
                     timeout(time: 10, unit: 'MINUTES') {
 
-                        def analysisId = null
-                        def taskStatus = "PENDING"
+                        def analysisId = ""
 
-                        while (taskStatus == "PENDING" || taskStatus == "IN_PROGRESS") {
+                        while (true) {
 
-                            sleep(time: 10, unit: 'SECONDS')
+                            sleep 10
 
                             def resp = sh(
                                 script: """
@@ -253,14 +252,24 @@ pipeline {
 
                             echo "CE Task Response: ${resp}"
 
-                            def json = readJSON text: resp
-
-                            taskStatus = json.task.status
+                            def taskStatus = sh(
+                                script: """
+                                    echo '${resp}' | jq -r '.task.status'
+                                """,
+                                returnStdout: true
+                            ).trim()
 
                             echo "Current Task Status: ${taskStatus}"
 
                             if (taskStatus == "SUCCESS") {
-                                analysisId = json.task.analysisId
+
+                                analysisId = sh(
+                                    script: """
+                                        echo '${resp}' | jq -r '.task.analysisId'
+                                    """,
+                                    returnStdout: true
+                                ).trim()
+
                                 break
                             }
 
@@ -269,11 +278,9 @@ pipeline {
                             }
                         }
 
-                        if (!analysisId) {
-                            error("analysisId not found")
-                        }
-
                         echo "Analysis ID: ${analysisId}"
+
+                        sleep 5
 
                         def gateResp = sh(
                             script: """
@@ -285,9 +292,12 @@ pipeline {
 
                         echo "Quality Gate Response: ${gateResp}"
 
-                        def gateJson = readJSON text: gateResp
-
-                        def gateStatus = gateJson.projectStatus.status
+                        def gateStatus = sh(
+                            script: """
+                                echo '${gateResp}' | jq -r '.projectStatus.status'
+                            """,
+                            returnStdout: true
+                        ).trim()
 
                         echo "Quality Gate Status: ${gateStatus}"
 
@@ -308,9 +318,6 @@ ${SONAR_HOST_URL}/dashboard?id=car-backend
         }
     }
 }
-
-
-
         // ─────────────────────────────────────────────────────
         // STAGE 7 — Docker Build
         // ─────────────────────────────────────────────────────
