@@ -417,17 +417,24 @@ ${SONAR_HOST_URL}/dashboard?id=car-backend
         stage('Stage 10 | Push to ECR') {
     steps {
         script {
-            sh """
-                aws ecr get-login-password --region ${AWS_REGION} | \
+            sh '''
+                aws ecr get-login-password --region $AWS_REGION | \
                     docker login \
                         --username AWS \
                         --password-stdin \
-                        ${env.ECR_REGISTRY}
-                docker tag ${env.IMAGE_URI} ${env.ECR_REGISTRY}/${ECR_REPOSITORY}:latest
-                docker push ${env.IMAGE_URI}
-                docker push ${env.ECR_REGISTRY}/${ECR_REPOSITORY}:latest
-                echo ${env.IMAGE_URI} > /tmp/backend_image_uri.txt
-            """
+                        $ECR_REGISTRY
+
+                docker tag \
+                    $IMAGE_URI \
+                    $ECR_REGISTRY/$ECR_REPOSITORY:latest
+
+                docker push $IMAGE_URI
+
+                docker push \
+                    $ECR_REGISTRY/$ECR_REPOSITORY:latest
+
+                echo $IMAGE_URI > /tmp/backend_image_uri.txt
+            '''
         }
     }
 }
