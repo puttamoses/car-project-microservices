@@ -16,8 +16,8 @@
 //  ✅ Jenkins one-time setup:
 //    Global Tool Config → NodeJS-20, OWASP-DC
 //    Configure System   → SonarQube server named "SonarQube"
-//    Credentials        → sonar-token, aws-credentials,
-//                         aws-account-id, react-app-api-url
+//    Credentials        → sonar-token, aws-account-id,
+//                         react-app-api-url
 // ─────────────────────────────────────────────────────────────
 
 pipeline {
@@ -138,7 +138,22 @@ pipeline {
                 sh 'mkdir -p car-frontend/dependency-check-report'
                 dependencyCheck(
                     odcInstallation: 'OWASP-DC',
-                    additionalArguments: '--project car-frontend --scan car-frontend --exclude "**/.git/**" --exclude "**/node_modules/**" --exclude "**/build/**" --exclude "**/coverage/**" --exclude "**/dependency-check-report/**" --format XML --format HTML --format JSON --out car-frontend/dependency-check-report --failOnCVSS 9 --disableAssembly --disableNodeAudit'
+                    additionalArguments: '''
+                        --project car-frontend
+                        --scan car-frontend
+                        --format XML
+                        --format HTML
+                        --format JSON
+                        --out car-frontend/dependency-check-report
+                        --exclude "**/.git/**"
+                        --exclude "**/node_modules/**"
+                        --exclude "**/build/**"
+                        --exclude "**/coverage/**"
+                        --exclude "**/dependency-check-report/**"
+                        --failOnCVSS 9
+                        --disableAssembly
+                        --disableNodeAudit
+                    '''
                 )
             }
             post {
@@ -197,7 +212,9 @@ pipeline {
                     if (!taskId) error('ceTaskId not found in report-task.txt')
                     echo "Polling SonarQube task: ${taskId}"
 
-                    withCredentials([string(credentialsId: 'sonar-token', variable: 'SONAR_TOKEN_VAL')]) {
+                    withCredentials([
+                        string(credentialsId: 'sonar-token', variable: 'SONAR_TOKEN_VAL')
+                    ]) {
                         timeout(time: 10, unit: 'MINUTES') {
                             waitUntil(initialRecurrencePeriod: 10000) {
                                 def resp = sh(
@@ -312,26 +329,25 @@ pipeline {
         // ─────────────────────────────────────────────────────
         stage('Stage 10 | Push to ECR') {
             steps {
-                withCredentials([[
-                    $class       : 'AmazonWebServicesCredentialsBinding',
-                    credentialsId: 'aws-credentials'
-                ]]) {
-                    script {
-                        sh """
-                            aws ecr get-login-password --region ${AWS_REGION} | \
-                                docker login \
-                                    --username AWS \
-                                    --password-stdin \
-                                    ${env.ECR_REGISTRY}
+                script {
+                    sh '''
+                        aws ecr get-login-password --region $AWS_REGION | \
+                            docker login \
+                                --username AWS \
+                                --password-stdin \
+                                $ECR_REGISTRY
 
-                            docker tag ${env.IMAGE_URI} ${env.ECR_REGISTRY}/${ECR_REPOSITORY}:latest
+                        docker tag \
+                            $IMAGE_URI \
+                            $ECR_REGISTRY/$ECR_REPOSITORY:latest
 
-                            docker push ${env.IMAGE_URI}
-                            docker push ${env.ECR_REGISTRY}/${ECR_REPOSITORY}:latest
+                        docker push $IMAGE_URI
 
-                            echo ${env.IMAGE_URI} > /tmp/frontend_image_uri.txt
-                        """
-                    }
+                        docker push \
+                            $ECR_REGISTRY/$ECR_REPOSITORY:latest
+
+                        echo $IMAGE_URI > /tmp/frontend_image_uri.txt
+                    '''
                 }
             }
         }
@@ -341,53 +357,56 @@ pipeline {
         // ─────────────────────────────────────────────────────
         stage('Stage 11 | Upload Reports to S3') {
             steps {
-                withCredentials([[
-                    $class       : 'AmazonWebServicesCredentialsBinding',
-                    credentialsId: 'aws-credentials'
-                ]]) {
-                    sh '''
-                        R="car-frontend/build-${BUILD_NUMBER}"
+                sh '''
+                    R="car-frontend/build-${BUILD_NUMBER}"
 
-                        [ -f trivy-report.json ] && \
-                            aws s3 cp trivy-report.json s3://${S3_BUCKET}/${R}/trivy-report.json \
-                            || echo "trivy-report.json not found, skipping"
+                    [ -f trivy-report.json ] && \
+                        aws s3 cp trivy-report.json \
+                            s3://${S3_BUCKET}/${R}/trivy-report.json \
+                        || echo "trivy-report.json not found, skipping"
 
-                        [ -d car-frontend/dependency-check-report ] && \
-                            aws s3 cp car-frontend/dependency-check-report/ \
-                                s3://${S3_BUCKET}/${R}/sca/ --recursive \
-                            || echo "OWASP report dir not found, skipping"
+                    [ -d car-frontend/dependency-check-report ] && \
+                        aws s3 cp car-frontend/dependency-check-report/ \
+                            s3://${S3_BUCKET}/${R}/sca/ --recursive \
+                        || echo "OWASP report dir not found, skipping"
 
-                        [ -f car-frontend/coverage/lcov.info ] && \
-                            aws s3 cp car-frontend/coverage/lcov.info \
-                                s3://${S3_BUCKET}/${R}/coverage/lcov.info \
-                            || echo "lcov.info not found, skipping"
+                    [ -f car-frontend/coverage/lcov.info ] && \
+                        aws s3 cp car-frontend/coverage/lcov.info \
+                            s3://${S3_BUCKET}/${R}/coverage/lcov.info \
+                        || echo "lcov.info not found, skipping"
 
-                        echo "✅ Reports upload complete → s3://${S3_BUCKET}/${R}/"
-                    '''
-                }
+                    echo "✅ Reports upload complete → s3://${S3_BUCKET}/${R}/"
+                '''
             }
         }
 
     }
 
     post {
+
         success {
             script {
-                def imageUri = sh(script: 'cat /tmp/frontend_image_uri.txt', returnStdout: true).trim()
+                def imageUri = sh(
+                    script: 'cat /tmp/frontend_image_uri.txt',
+                    returnStdout: true
+                ).trim()
                 echo "✅ CI passed — triggering CD with: ${imageUri}"
                 build job: 'car-frontend-cd',
                       parameters: [string(name: 'IMAGE_URI', value: imageUri)],
                       wait: false
             }
         }
+
         failure {
             echo '❌ CI failed — CD will NOT be triggered'
         }
+
         always {
             sh 'docker image prune -f || true'
             sh 'rm -f /tmp/frontend_image_uri.txt trivy-report.json || true'
             cleanWs()
         }
+
     }
 
 }
