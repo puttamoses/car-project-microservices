@@ -415,31 +415,23 @@ ${SONAR_HOST_URL}/dashboard?id=car-backend
         // STAGE 10 — Push to ECR
         // ─────────────────────────────────────────────────────
         stage('Stage 10 | Push to ECR') {
-            steps {
-                withCredentials([[
-                    $class       : 'AmazonWebServicesCredentialsBinding',
-                    credentialsId: 'aws-credentials'
-                ]]) {
-                    script {
-                        sh """
-                            aws ecr get-login-password --region ${AWS_REGION} | \
-                                docker login \
-                                    --username AWS \
-                                    --password-stdin \
-                                    ${env.ECR_REGISTRY}
-
-                            docker tag ${env.IMAGE_URI} ${env.ECR_REGISTRY}/${ECR_REPOSITORY}:latest
-
-                            docker push ${env.IMAGE_URI}
-                            docker push ${env.ECR_REGISTRY}/${ECR_REPOSITORY}:latest
-
-                            echo ${env.IMAGE_URI} > /tmp/backend_image_uri.txt
-                        """
-                    }
-                }
-            }
+    steps {
+        script {
+            sh """
+                aws ecr get-login-password --region ${AWS_REGION} | \
+                    docker login \
+                        --username AWS \
+                        --password-stdin \
+                        ${env.ECR_REGISTRY}
+                docker tag ${env.IMAGE_URI} ${env.ECR_REGISTRY}/${ECR_REPOSITORY}:latest
+                docker push ${env.IMAGE_URI}
+                docker push ${env.ECR_REGISTRY}/${ECR_REPOSITORY}:latest
+                echo ${env.IMAGE_URI} > /tmp/backend_image_uri.txt
+            """
         }
-
+    }
+}
+ 
         // ─────────────────────────────────────────────────────
         // STAGE 11 — Upload Reports to S3
         //
