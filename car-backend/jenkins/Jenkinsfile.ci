@@ -125,46 +125,41 @@ pipeline {
         //     dependency-check-report.json → SonarQube import
         // ─────────────────────────────────────────────────────
         stage('Stage 4 | SCA — OWASP Dependency-Check') {
-    steps {
-
-        dir('car-backend') {
-
-            dependencyCheck(
-                odcInstallation: 'OWASP-DC',
-                additionalArguments: '''
-                    --project car-backend
-                    --scan .
-                    --format ALL
-                    --out ./dependency-check-report
-                    --exclude "**/.git/**"
-                    --exclude "**/node_modules/**"
-                    --exclude "**/coverage/**"
-                    --failOnCVSS 9
-                    --disableAssembly
-                '''
-            )
-
-            sh '''
-                echo "===== Dependency Check Reports ====="
-                find . -name "dependency-check-report*"
-            '''
+            steps {
+                dir('car-backend') {
+                    dependencyCheck(
+                        odcInstallation: 'OWASP-DC',
+                        additionalArguments: '''
+                            --project car-backend
+                            --scan .
+                            --format ALL
+                            --out ./dependency-check-report
+                            --exclude "**/.git/**"
+                            --exclude "**/node_modules/**"
+                            --exclude "**/coverage/**"
+                            --failOnCVSS 9
+                            --disableAssembly
+                        '''
+                    )
+                    sh '''
+                        echo "===== Dependency Check Reports ====="
+                        find . -name "dependency-check-report*"
+                    '''
+                }
+            }
+            post {
+                always {
+                    dependencyCheckPublisher(
+                        pattern: '**/dependency-check-report.xml'
+                    )
+                    archiveArtifacts(
+                        artifacts: '**/dependency-check-report/**',
+                        allowEmptyArchive: true
+                    )
+                }
+            }
         }
-    }
 
-    post {
-        always {
-
-            dependencyCheckPublisher(
-                pattern: '**/dependency-check-report.xml'
-            )
-
-            archiveArtifacts(
-                artifacts: '**/dependency-check-report/**',
-                allowEmptyArchive: true
-            )
-        }
-    }
-}
         // ─────────────────────────────────────────────────────
         // STAGE 5 — SAST (SonarQube)
         //
@@ -210,114 +205,105 @@ pipeline {
         //   Name: Jenkins
         //   URL:  http://13.204.254.88:8080/sonarqube-webhook/
         // ─────────────────────────────────────────────────────
-            stage('Stage 6 | Quality Gate — HARD STOP') {
+        stage('Stage 6 | Quality Gate — HARD STOP') {
+            steps {
+                withSonarQubeEnv('SonarQube') {
+                    script {
+                        def taskId = readFile('car-backend/.scannerwork/report-task.txt')
+                            .split('\n')
+                            .find { it.startsWith('ceTaskId=') }
+                            ?.replace('ceTaskId=', '')
+                            ?.trim()
 
-    steps {
+                        if (!taskId) {
+                            error('ceTaskId not found')
+                        }
 
-        withSonarQubeEnv('SonarQube') {
+                        echo "Polling SonarQube task: ${taskId}"
 
-            script {
+                        withCredentials([
+                            string(credentialsId: 'sonar-token', variable: 'SONAR_TOKEN_VAL')
+                        ]) {
+                            timeout(time: 10, unit: 'MINUTES') {
+                                def analysisId = ""
 
-                def taskId = readFile('car-backend/.scannerwork/report-task.txt')
-                    .split('\n')
-                    .find { it.startsWith('ceTaskId=') }
-                    ?.replace('ceTaskId=', '')
-                    ?.trim()
+                                while (true) {
+                                    sleep 10
 
-                if (!taskId) {
-                    error('ceTaskId not found')
-                }
+                                    def resp = sh(
+                                        script: """
+                                            curl -s -u "\$SONAR_TOKEN_VAL:" \
+                                            "\$SONAR_HOST_URL/api/ce/task?id=${taskId}"
+                                        """,
+                                        returnStdout: true
+                                    ).trim()
 
-                echo "Polling SonarQube task: ${taskId}"
+                                    echo "CE Task Response: ${resp}"
 
-                withCredentials([
-                    string(credentialsId: 'sonar-token', variable: 'SONAR_TOKEN_VAL')
-                ]) {
+                                    def taskStatus = sh(
+                                        script: """
+                                            echo '${resp}' | jq -r '.task.status'
+                                        """,
+                                        returnStdout: true
+                                    ).trim()
 
-                    timeout(time: 10, unit: 'MINUTES') {
+                                    echo "Current Task Status: ${taskStatus}"
 
-                        def analysisId = ""
+                                    if (taskStatus == "SUCCESS") {
+                                        analysisId = sh(
+                                            script: """
+                                                echo '${resp}' | jq -r '.task.analysisId'
+                                            """,
+                                            returnStdout: true
+                                        ).trim()
+                                        break
+                                    }
 
-                        while (true) {
+                                    if (taskStatus == "FAILED" || taskStatus == "CANCELED") {
+                                        error("SonarQube background task failed: ${taskStatus}")
+                                    }
+                                }
 
-                            sleep 10
+                                echo "Analysis ID: ${analysisId}"
 
-                            def resp = sh(
-                                script: """
-                                    curl -s -u "\$SONAR_TOKEN_VAL:" \
-                                    "\$SONAR_HOST_URL/api/ce/task?id=${taskId}"
-                                """,
-                                returnStdout: true
-                            ).trim()
+                                sleep 5
 
-                            echo "CE Task Response: ${resp}"
-
-                            def taskStatus = sh(
-                                script: """
-                                    echo '${resp}' | jq -r '.task.status'
-                                """,
-                                returnStdout: true
-                            ).trim()
-
-                            echo "Current Task Status: ${taskStatus}"
-
-                            if (taskStatus == "SUCCESS") {
-
-                                analysisId = sh(
+                                def gateResp = sh(
                                     script: """
-                                        echo '${resp}' | jq -r '.task.analysisId'
+                                        curl -s -u "\$SONAR_TOKEN_VAL:" \
+                                        "\$SONAR_HOST_URL/api/qualitygates/project_status?analysisId=${analysisId}"
                                     """,
                                     returnStdout: true
                                 ).trim()
 
-                                break
-                            }
+                                echo "Quality Gate Response: ${gateResp}"
 
-                            if (taskStatus == "FAILED" || taskStatus == "CANCELED") {
-                                error("SonarQube background task failed: ${taskStatus}")
-                            }
-                        }
+                                def gateStatus = sh(
+                                    script: """
+                                        echo '${gateResp}' | jq -r '.projectStatus.status'
+                                    """,
+                                    returnStdout: true
+                                ).trim()
 
-                        echo "Analysis ID: ${analysisId}"
+                                echo "Quality Gate Status: ${gateStatus}"
 
-                        sleep 5
-
-                        def gateResp = sh(
-                            script: """
-                                curl -s -u "\$SONAR_TOKEN_VAL:" \
-                                "\$SONAR_HOST_URL/api/qualitygates/project_status?analysisId=${analysisId}"
-                            """,
-                            returnStdout: true
-                        ).trim()
-
-                        echo "Quality Gate Response: ${gateResp}"
-
-                        def gateStatus = sh(
-                            script: """
-                                echo '${gateResp}' | jq -r '.projectStatus.status'
-                            """,
-                            returnStdout: true
-                        ).trim()
-
-                        echo "Quality Gate Status: ${gateStatus}"
-
-                        if (gateStatus != "OK") {
-
-                            error("""
+                                if (gateStatus != "OK") {
+                                    error("""
 QUALITY GATE FAILED: ${gateStatus}
 
 Dashboard:
 ${SONAR_HOST_URL}/dashboard?id=car-backend
-                            """)
-                        }
+                                    """)
+                                }
 
-                        echo "✅ QUALITY GATE PASSED"
+                                echo "✅ QUALITY GATE PASSED"
+                            }
+                        }
                     }
                 }
             }
         }
-    }
-}
+
         // ─────────────────────────────────────────────────────
         // STAGE 7 — Docker Build
         // ─────────────────────────────────────────────────────
@@ -382,6 +368,7 @@ ${SONAR_HOST_URL}/dashboard?id=car-backend
                 }
             }
         }
+
         // ─────────────────────────────────────────────────────
         // STAGE 9 — Smoke Test
         // ─────────────────────────────────────────────────────
@@ -397,7 +384,7 @@ ${SONAR_HOST_URL}/dashboard?id=car-backend
 
                         sleep 10
 
-                        curl -sf http://localhost:5000/health   | grep -q 'ok'   || exit 1
+                        curl -sf http://localhost:5000/health   | grep -q 'ok'    || exit 1
                         curl -sf http://localhost:5000/api/cars | grep -q 'brand' || exit 1
 
                         echo '✅ Smoke test passed'
@@ -415,30 +402,30 @@ ${SONAR_HOST_URL}/dashboard?id=car-backend
         // STAGE 10 — Push to ECR
         // ─────────────────────────────────────────────────────
         stage('Stage 10 | Push to ECR') {
-    steps {
-        script {
-            sh '''
-                aws ecr get-login-password --region $AWS_REGION | \
-                    docker login \
-                        --username AWS \
-                        --password-stdin \
-                        $ECR_REGISTRY
+            steps {
+                script {
+                    sh '''
+                        aws ecr get-login-password --region $AWS_REGION | \
+                            docker login \
+                                --username AWS \
+                                --password-stdin \
+                                $ECR_REGISTRY
 
-                docker tag \
-                    $IMAGE_URI \
-                    $ECR_REGISTRY/$ECR_REPOSITORY:latest
+                        docker tag \
+                            $IMAGE_URI \
+                            $ECR_REGISTRY/$ECR_REPOSITORY:latest
 
-                docker push $IMAGE_URI
+                        docker push $IMAGE_URI
 
-                docker push \
-                    $ECR_REGISTRY/$ECR_REPOSITORY:latest
+                        docker push \
+                            $ECR_REGISTRY/$ECR_REPOSITORY:latest
 
-                echo $IMAGE_URI > /tmp/backend_image_uri.txt
-            '''
+                        echo $IMAGE_URI > /tmp/backend_image_uri.txt
+                    '''
+                }
+            }
         }
-    }
-}
- 
+
         // ─────────────────────────────────────────────────────
         // STAGE 11 — Upload Reports to S3
         //
@@ -479,9 +466,7 @@ ${SONAR_HOST_URL}/dashboard?id=car-backend
 
         success {
             script {
-
                 if (fileExists('/tmp/backend_image_uri.txt')) {
-
                     def imageUri = sh(
                         script: 'cat /tmp/backend_image_uri.txt',
                         returnStdout: true
@@ -510,3 +495,7 @@ ${SONAR_HOST_URL}/dashboard?id=car-backend
             sh 'rm -f /tmp/backend_image_uri.txt trivy-report.json || true'
             cleanWs()
         }
+
+    }
+
+}
