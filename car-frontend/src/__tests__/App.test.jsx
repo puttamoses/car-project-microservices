@@ -24,7 +24,7 @@ afterEach(() => {
 describe('App', () => {
   it('renders navbar logo', async () => {
     render(<App />);
-    expect(screen.getByText(/ELITE/i)).toBeInTheDocument();
+    expect(screen.getByText(/AUTO.*ELITE/i)).toBeInTheDocument();
   });
 
   it('renders hero heading', async () => {
@@ -63,7 +63,7 @@ describe('Booking Modal', () => {
     await userEvent.click(btn);
     await userEvent.click(screen.getByText('Cancel'));
     await waitFor(() => {
-      expect(screen.queryByText(/Book Test Drive/i)).not.toBeInTheDocument();
+      expect(screen.queryByText(/Confirm Booking/i)).not.toBeInTheDocument();
     });
   });
 });
