@@ -344,29 +344,29 @@ Dashboard: ${SONAR_HOST_URL}/dashboard?id=car-frontend
             sh """
                 set -e
 
-                echo "Cleaning old containers on port 8080..."
-                docker ps -q --filter "publish=8080" | xargs -r docker rm -f || true
+                echo "Cleaning old containers on port 9090..."
+                docker ps -q --filter "publish=9090" | xargs -r docker rm -f || true
 
                 docker run -d \
                     --name frontend-smoke-${BUILD_NUMBER} \
-                    -p 8080:80 \
+                    -p 9090:80 \
                     ${env.IMAGE_URI}
 
                 sleep 10
 
-                STATUS=\$(curl -o /dev/null -sw "%{http_code}" http://localhost:8080/)
-                [ "\$STATUS" = "200" ] || exit 1
+                STATUS=\$(curl -o /dev/null -sw "%{http_code}" http://localhost:9090/)
+                [ "\$STATUS" = "200" ] && echo "Root OK" || exit 1
 
-                curl -sf http://localhost:8080/ | grep -q "root" || exit 1
+                curl -sf http://localhost:9090/ | grep -q "root" \
+                    && echo "React app served" || exit 1
 
-                STATUS=\$(curl -o /dev/null -sw "%{http_code}" http://localhost:8080/cars)
-                [ "\$STATUS" = "200" ] || exit 1
+                STATUS=\$(curl -o /dev/null -sw "%{http_code}" http://localhost:9090/cars)
+                [ "\$STATUS" = "200" ] && echo "React Router OK" || exit 1
 
                 echo "✅ Smoke test passed"
             """
         }
     }
-
     post {
         always {
             sh "docker rm -f frontend-smoke-${BUILD_NUMBER} || true"
