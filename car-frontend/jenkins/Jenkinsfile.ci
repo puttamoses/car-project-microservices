@@ -339,36 +339,40 @@ Dashboard: ${SONAR_HOST_URL}/dashboard?id=car-frontend
         // STAGE 9 — Smoke Test
         // ─────────────────────────────────────────────────────
         stage('Stage 9 | Smoke Test') {
-            steps {
-                script {
-                    sh """
-                        docker run -d \
-                            --name frontend-smoke-${BUILD_NUMBER} \
-                            -p 8080:80 \
-                            ${env.IMAGE_URI}
+    steps {
+        script {
+            sh """
+                set -e
 
-                        sleep 10
+                echo "Cleaning old containers on port 8080..."
+                docker ps -q --filter "publish=8080" | xargs -r docker rm -f || true
 
-                        STATUS=\$(curl -o /dev/null -sw "%{http_code}" http://localhost:8080/)
-                        [ "\$STATUS" = "200" ] && echo "Root OK" || exit 1
+                docker run -d \
+                    --name frontend-smoke-${BUILD_NUMBER} \
+                    -p 8080:80 \
+                    ${env.IMAGE_URI}
 
-                        curl -sf http://localhost:8080/ | grep -q "root" \
-                            && echo "React app served" || exit 1
+                sleep 10
 
-                        STATUS=\$(curl -o /dev/null -sw "%{http_code}" http://localhost:8080/cars)
-                        [ "\$STATUS" = "200" ] && echo "React Router OK" || exit 1
+                STATUS=\$(curl -o /dev/null -sw "%{http_code}" http://localhost:8080/)
+                [ "\$STATUS" = "200" ] || exit 1
 
-                        echo "✅ Smoke test passed"
-                    """
-                }
-            }
-            post {
-                always {
-                    sh "docker rm -f frontend-smoke-${BUILD_NUMBER} || true"
-                }
-            }
+                curl -sf http://localhost:8080/ | grep -q "root" || exit 1
+
+                STATUS=\$(curl -o /dev/null -sw "%{http_code}" http://localhost:8080/cars)
+                [ "\$STATUS" = "200" ] || exit 1
+
+                echo "✅ Smoke test passed"
+            """
         }
+    }
 
+    post {
+        always {
+            sh "docker rm -f frontend-smoke-${BUILD_NUMBER} || true"
+        }
+    }
+}
         // ─────────────────────────────────────────────────────
         // STAGE 10 — Push to ECR
         // ─────────────────────────────────────────────────────
