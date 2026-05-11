@@ -445,54 +445,69 @@ ${SONAR_HOST_URL}/dashboard?id=car-backend
         // All paths are relative to WORKSPACE.
         // ─────────────────────────────────────────────────────
         stage('Stage 11 | Upload Reports to S3') {
-            steps {
-                withCredentials([[
-                    $class       : 'AmazonWebServicesCredentialsBinding',
-                    credentialsId: 'aws-credentials'
-                ]]) {
-                    sh '''
-                        R="car-backend/build-${BUILD_NUMBER}"
+    steps {
+        sh '''
+            R="car-backend/build-${BUILD_NUMBER}"
 
-                        [ -f trivy-report.json ] && \
-                            aws s3 cp trivy-report.json s3://${S3_BUCKET}/${R}/trivy-report.json \
-                            || echo "trivy-report.json not found, skipping"
+            [ -f trivy-report.json ] && \
+                aws s3 cp \
+                trivy-report.json \
+                s3://${S3_BUCKET}/${R}/trivy-report.json \
+                || echo "trivy-report.json not found, skipping"
 
-                        [ -d car-backend/dependency-check-report ] && \
-                            aws s3 cp car-backend/dependency-check-report/ \
-                                s3://${S3_BUCKET}/${R}/sca/ --recursive \
-                            || echo "OWASP report dir not found, skipping"
+            [ -d car-backend/dependency-check-report ] && \
+                aws s3 cp \
+                car-backend/dependency-check-report/ \
+                s3://${S3_BUCKET}/${R}/sca/ \
+                --recursive \
+                || echo "OWASP report dir not found, skipping"
 
-                        [ -f car-backend/coverage/lcov.info ] && \
-                            aws s3 cp car-backend/coverage/lcov.info \
-                                s3://${S3_BUCKET}/${R}/coverage/lcov.info \
-                            || echo "lcov.info not found, skipping"
+            [ -f car-backend/coverage/lcov.info ] && \
+                aws s3 cp \
+                car-backend/coverage/lcov.info \
+                s3://${S3_BUCKET}/${R}/coverage/lcov.info \
+                || echo "lcov.info not found, skipping"
 
-                        echo "✅ Reports upload complete → s3://${S3_BUCKET}/${R}/"
-                    '''
-                }
-            }
-        }
-
+            echo "✅ Reports upload complete → s3://${S3_BUCKET}/${R}/"
+        '''
     }
+}
 
-    post {
-        success {
-            script {
-                def imageUri = sh(script: 'cat /tmp/backend_image_uri.txt', returnStdout: true).trim()
+}
+
+post {
+
+    success {
+        script {
+
+            if (fileExists('/tmp/backend_image_uri.txt')) {
+
+                def imageUri = sh(
+                    script: 'cat /tmp/backend_image_uri.txt',
+                    returnStdout: true
+                ).trim()
+
                 echo "✅ CI passed — triggering CD with: ${imageUri}"
+
                 build job: 'car-backend-cd',
-                      parameters: [string(name: 'IMAGE_URI', value: imageUri)],
-                      wait: false
+                    parameters: [
+                        string(name: 'IMAGE_URI', value: imageUri)
+                    ],
+                    wait: false
+
+            } else {
+                error('❌ IMAGE URI file missing')
             }
-        }
-        failure {
-            echo '❌ CI failed — CD will NOT be triggered'
-        }
-        always {
-            sh 'docker image prune -f || true'
-            sh 'rm -f /tmp/backend_image_uri.txt trivy-report.json || true'
-            cleanWs()
         }
     }
 
+    failure {
+        echo '❌ CI failed — CD will NOT be triggered'
+    }
+
+    always {
+        sh 'docker image prune -f || true'
+        sh 'rm -f /tmp/backend_image_uri.txt trivy-report.json || true'
+        cleanWs()
+    }
 }
