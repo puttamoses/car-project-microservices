@@ -464,38 +464,40 @@ ${SONAR_HOST_URL}/dashboard?id=car-backend
 
     post {
 
-        success {
-            script {
-                if (fileExists('/tmp/backend_image_uri.txt')) {
-                    def imageUri = sh(
-                        script: 'cat /tmp/backend_image_uri.txt',
-                        returnStdout: true
-                    ).trim()
+    success {
+        script {
 
-                    echo "✅ CI passed — triggering CD with: ${imageUri}"
+            if (fileExists('/tmp/backend_image_uri.txt')) {
 
-                    build job: 'car-backend-cd',
-                        parameters: [
-                            string(name: 'IMAGE_URI', value: imageUri)
-                        ],
-                        wait: false
+                def imageUri = sh(
+                    script: 'cat /tmp/backend_image_uri.txt',
+                    returnStdout: true
+                ).trim()
 
-                } else {
-                    error('❌ IMAGE URI file missing')
-                }
+                echo "✅ CI passed — triggering CD with: ${imageUri}"
+
+                build job: 'car-backend-cd',
+                    parameters: [
+                        string(name: 'IMAGE_URI', value: imageUri)
+                    ],
+                    wait: false
+
+                sh 'rm -f /tmp/backend_image_uri.txt trivy-report.json || true'
+
+            } else {
+                error('❌ IMAGE URI file missing')
             }
         }
-
-        failure {
-            echo '❌ CI failed — CD will NOT be triggered'
-        }
-
-        always {
-            sh 'docker image prune -f || true'
-            sh 'rm -f /tmp/backend_image_uri.txt trivy-report.json || true'
-            cleanWs()
-        }
-
     }
+
+    failure {
+        echo '❌ CI failed — CD will NOT be triggered'
+    }
+
+    always {
+        sh 'docker image prune -f || true'
+        cleanWs()
+    }
+}
 
 }
