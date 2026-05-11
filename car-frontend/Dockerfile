@@ -6,14 +6,17 @@ WORKDIR /app
 COPY package*.json ./
 RUN npm install
 
-# .env.production contains REACT_APP_API_URL baked in from Jenkins
 COPY .env.production .env.production
-
 COPY . .
+
 RUN npm run build
 
-# Stage 2 — Serve with Nginx
-FROM nginx:alpine
+
+# Stage 2 — Serve with Nginx (FIXED)
+FROM nginx:stable-alpine
+
+# 🔥 Fix CVEs by updating base packages
+RUN apk update && apk upgrade --no-cache
 
 RUN rm -rf /usr/share/nginx/html/*
 COPY --from=builder /app/build /usr/share/nginx/html
