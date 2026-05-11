@@ -11,7 +11,7 @@ WORKDIR /app
 COPY package*.json ./
 
 RUN npm install -g npm@latest \
-    && npm ci --omit=dev \
+    && npm ci --omit=dev --ignore-scripts \
     && npm cache clean --force
 
 # ─────────────────────────────
