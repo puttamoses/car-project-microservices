@@ -472,9 +472,6 @@ ${SONAR_HOST_URL}/dashboard?id=car-backend
         '''
     }
 }
-
-}
-
 post {
 
     success {
