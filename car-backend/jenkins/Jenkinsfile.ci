@@ -340,7 +340,7 @@ ${SONAR_HOST_URL}/dashboard?id=car-backend
         // These are NOT caught by OWASP Dependency-Check.
         // --ignore-unfixed: only fail on CVEs with a fix available
         // ─────────────────────────────────────────────────────
-        stage('Trivy Scan') {
+        stage('Stage 8 | Trivy Scan') {
             steps {
                 script {
                     def imageUri = env.IMAGE_URI
@@ -444,12 +444,6 @@ ${SONAR_HOST_URL}/dashboard?id=car-backend
         //
         // All paths are relative to WORKSPACE.
         // ─────────────────────────────────────────────────────
-        pipeline {
-
-    agent any
-
-    stages {
-
         stage('Stage 11 | Upload Reports to S3') {
             steps {
                 sh '''
@@ -516,5 +510,3 @@ ${SONAR_HOST_URL}/dashboard?id=car-backend
             sh 'rm -f /tmp/backend_image_uri.txt trivy-report.json || true'
             cleanWs()
         }
-    }
-}
