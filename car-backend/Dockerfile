@@ -6,9 +6,9 @@ COPY package*.json ./
 
 RUN apk update \
     && apk upgrade \
-    && npm install -g npm@latest \
+    && npm install -g npm@latest --ignore-scripts \
     && npm ci --omit=dev --ignore-scripts \
-    && npm audit fix --force \
+    && npm audit fix --force --ignore-scripts \
     && npm cache clean --force \
     && rm -rf /var/cache/apk/*
 
