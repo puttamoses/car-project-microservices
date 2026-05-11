@@ -63,7 +63,7 @@ describe('Booking Modal', () => {
     await userEvent.click(btn);
     await userEvent.click(screen.getByText('Cancel'));
     await waitFor(() => {
-      expect(screen.queryByText(/Book a Test Drive/i)).not.toBeInTheDocument();
+      expect(screen.queryByText(/Book Test Drive/i)).not.toBeInTheDocument();
     });
   });
 });
