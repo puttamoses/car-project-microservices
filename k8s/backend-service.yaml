@@ -1,9 +1,5 @@
-# k8s/backend-service.yaml
-# Internal backend service (no external access)
-
 apiVersion: v1
 kind: Service
-
 metadata:
   name: car-backend
   namespace: autoelite
@@ -12,9 +8,9 @@ spec:
   selector:
     app: car-backend
 
-  type: ClusterIP   # ✅ changed from LoadBalancer (ALB/NLB) to internal service
+  type: ClusterIP
 
   ports:
     - port: 80
-      targetPort: 5000
+      targetPort: 3000
       protocol: TCP
