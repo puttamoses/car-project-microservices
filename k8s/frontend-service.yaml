@@ -1,16 +1,15 @@
-# k8s/frontend-service.yaml
-# ClusterIP — Ingress handles all external traffic via ALB.
-# No LoadBalancer needed here; using one would provision a
-# second redundant ALB alongside the Ingress ALB.
 apiVersion: v1
 kind: Service
 metadata:
   name: car-frontend
   namespace: autoelite
+
 spec:
   selector:
     app: car-frontend
-  type: ClusterIP
+
+  type: LoadBalancer
+
   ports:
     - port: 80
       targetPort: 80
