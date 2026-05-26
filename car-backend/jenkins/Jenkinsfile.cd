@@ -26,18 +26,15 @@ pipeline {
 
     agent any
 
-    // ── CI sends: string(name: 'IMAGE_URI', value: imageUri) ──
-    // ── Jenkins requires downstream job to declare it here   ──
     parameters {
         string(
             name        : 'IMAGE_URI',
             defaultValue: '',
-            description : 'Full ECR URI injected by car-backend CI. Format: <account>.dkr.ecr.ap-south-1.amazonaws.com/car-backend:<build>-<hash>'
+            description : 'Full ECR URI injected by car-backend CI'
         )
     }
 
     environment {
-        // ── Pull from params — set by CI trigger ──────────────
         IMAGE_URI     = "${params.IMAGE_URI}"
         GITHUB_BRANCH = 'main'
         DEPLOY_FILE   = 'k8s/backend-deployment.yaml'
@@ -54,10 +51,6 @@ pipeline {
 
         // ─────────────────────────────────────────────────────
         // STAGE 0 — Validate
-        //
-        // CI writes IMAGE_URI to /tmp/backend_image_uri.txt
-        // then passes it here via build job parameters.
-        // If empty → CI post{} block failed before triggering.
         // ─────────────────────────────────────────────────────
         stage('Stage 0 | Validate Input') {
             steps {
@@ -66,11 +59,8 @@ pipeline {
                         error("""
 IMAGE_URI is empty.
 This job must be triggered by car-backend CI post { success }.
-CI passes it as: string(name: 'IMAGE_URI', value: imageUri)
-where imageUri is read from /tmp/backend_image_uri.txt after ECR push.
-
 Check:
-  1. Did car-backend CI Stage 10 (Push to ECR) succeed?
+  1. Did CI Stage 10 (Push to ECR) succeed?
   2. Does /tmp/backend_image_uri.txt exist on CI agent?
   3. Is this job name exactly 'car-backend-cd'?
                         """)
@@ -84,15 +74,6 @@ Check:
 
         // ─────────────────────────────────────────────────────
         // STAGE 1 — Update K8s YAML & Push to GitHub
-        //
-        // IMAGE_URI from CI e.g:
-        //   339918905923.dkr.ecr.ap-south-1.amazonaws.com/car-backend:42-abc1234
-        //
-        // sed uses | as delimiter because ECR URIs contain /
-        // sh uses """ so Groovy interpolates env.IMAGE_URI
-        //   and env.BUILD_NUMBER before shell executes.
-        // GIT_USER / GIT_PASS come from withCredentials →
-        //   escaped as \${} so shell handles them, not Groovy.
         // ─────────────────────────────────────────────────────
         stage('Stage 1 | Update K8s YAML & Push to GitHub') {
             steps {
@@ -106,35 +87,26 @@ Check:
                     sh """
                         set -e
 
-                        # ── Clean any leftover clone ──────────
                         rm -rf gitops-repo
 
-                        # ── Clone with PAT embedded in URL ────
                         echo "Cloning GitOps repository..."
                         git clone https://\${GIT_USER}:\${GIT_PASS}@github.com/puttamoses/car-project-microservices.git gitops-repo
 
                         cd gitops-repo
 
-                        # ── Commit identity ───────────────────
                         git config user.email "jenkins-ci@autoelite.com"
                         git config user.name  "Jenkins CI"
 
-                        # ── Show current image before update ──
                         echo "Current image in YAML:"
                         grep "image:" ${env.DEPLOY_FILE}
 
-                        # ── Update image line ─────────────────
-                        # | delimiter is safe — ECR URIs contain /
-                        # matches only car-backend image lines
                         sed -i "s|image:.*car-backend.*|image: ${env.IMAGE_URI}|g" ${env.DEPLOY_FILE}
 
-                        # ── Show updated image after change ───
                         echo "Updated image in YAML:"
                         grep "image:" ${env.DEPLOY_FILE}
 
                         git add ${env.DEPLOY_FILE}
 
-                        # ── Commit only if something changed ──
                         if git diff --cached --quiet; then
                             echo "⚠️  No changes — image tag already up to date in YAML"
                         else
@@ -158,3 +130,6 @@ Check:
         always {
             sh 'rm -rf gitops-repo || true'
             cleanWs()
+        }
+    }
+}
