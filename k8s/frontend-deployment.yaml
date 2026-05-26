@@ -20,7 +20,7 @@ spec:
         - name: car-frontend
 
           # ✅ Change to your ECR image URI
-          image: 339918905923.dkr.ecr.ap-south-1.amazonaws.com/car-frontend:6-b362d2c
+          image: 339918905923.dkr.ecr.ap-south-1.amazonaws.com/car-frontend:7-89dfbfc
 
           imagePullPolicy: Always
           ports:
