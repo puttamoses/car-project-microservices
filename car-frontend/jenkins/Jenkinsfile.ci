@@ -433,29 +433,37 @@ Dashboard: ${SONAR_HOST_URL}/dashboard?id=car-frontend
 
     post {
 
-        success {
-            script {
-                def imageUri = sh(
-                    script: 'cat /tmp/frontend_image_uri.txt',
-                    returnStdout: true
-                ).trim()
-                echo "✅ CI passed — triggering CD with: ${imageUri}"
-                build job: 'car-frontend-cd',
-                      parameters: [string(name: 'IMAGE_URI', value: imageUri)],
-                      wait: false
-            }
-        }
+    success {
+        script {
 
-        failure {
-            echo '❌ CI failed — CD will NOT be triggered'
-        }
+            def imageUri = sh(
+                script: 'cat /tmp/frontend_image_uri.txt',
+                returnStdout: true
+            ).trim()
 
-        always {
-            sh 'docker image prune -f || true'
-            sh 'rm -f /tmp/frontend_image_uri.txt trivy-report.json || true'
-            cleanWs()
-        }
+            echo "✅ CI passed — triggering CD with: ${imageUri}"
 
+            build(
+                job: 'car-frontend-cd',
+                wait: false,
+                propagate: false,
+                parameters: [
+                    string(
+                        name: 'IMAGE_URI',
+                        value: imageUri
+                    )
+                ]
+            )
+        }
     }
 
+    failure {
+        echo '❌ CI failed — CD will NOT be triggered'
+    }
+
+    always {
+        sh 'docker image prune -f || true'
+        sh 'rm -f /tmp/frontend_image_uri.txt trivy-report.json || true'
+        cleanWs()
+    }
 }
