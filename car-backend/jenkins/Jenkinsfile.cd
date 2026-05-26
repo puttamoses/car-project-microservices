@@ -1,109 +1,121 @@
 // ─────────────────────────────────────────────────────────────
 //  car-backend — CD Pipeline (GitOps)
 //
-//  Triggered from CI pipeline
-//  Updates Kubernetes deployment YAML
-//  Pushes changes to GitHub
-//  ArgoCD auto-syncs to EKS
+//  Triggered by: CI pipeline post { success }
+//  Input:        IMAGE_URI from CI
+//
+//  How it works:
+//    1. Validates IMAGE_URI is not empty
+//    2. Clones GitHub GitOps repo
+//    3. Updates image in k8s/backend-deployment.yaml
+//    4. Commits and pushes only if file changed
+//    5. ArgoCD detects the change → syncs to EKS automatically
+//
+//  ✅ Jenkins Setup Required:
+//    Manage Jenkins → Credentials
+//      → github-creds  Username+Password (PAT as password)
 // ─────────────────────────────────────────────────────────────
-
 pipeline {
 
     agent any
 
+    // ── BUG 1 FIX: IMAGE_URI must be declared as a parameter ──
+    parameters {
+        string(
+            name        : 'IMAGE_URI',
+            defaultValue: '',
+            description : 'Full ECR image URI passed from CI pipeline'
+        )
+    }
+
     environment {
-
-        IMAGE_URI     = "${IMAGE_URI}"
-
-        GITHUB_REPO   = 'https://github.com/puttamoses/car-project-microservices.git'
-
+        // ── BUG 1 FIX: reference params, not undefined variable ──
+        IMAGE_URI     = "${params.IMAGE_URI}"
         GITHUB_BRANCH = 'main'
-
         DEPLOY_FILE   = 'k8s/backend-deployment.yaml'
     }
 
     options {
         timestamps()
-
         timeout(time: 10, unit: 'MINUTES')
-
         buildDiscarder(logRotator(numToKeepStr: '10'))
-
         disableConcurrentBuilds()
     }
 
     stages {
 
-        stage('Stage 1 | Update K8s YAML & Push to GitHub') {
-
+        // ── BUG 4 FIX: validate before doing anything ──────────
+        stage('Stage 0 | Validate Input') {
             steps {
+                script {
+                    if (!env.IMAGE_URI?.trim()) {
+                        error('❌ IMAGE_URI is empty — was this triggered manually without a parameter?')
+                    }
+                    echo "📦 Deploying image: ${env.IMAGE_URI}"
+                }
+            }
+        }
 
+        stage('Stage 1 | Update K8s YAML & Push to GitHub') {
+            steps {
                 withCredentials([
                     usernamePassword(
-                        credentialsId: 'github-creds',
+                        credentialsId   : 'github-creds',
                         usernameVariable: 'GIT_USER',
                         passwordVariable: 'GIT_PASS'
                     )
                 ]) {
-
-                    sh '''
+                    // ── BUG 3 FIX: double quotes allow Groovy to interpolate
+                    //               IMAGE_URI and BUILD_NUMBER before shell runs ──
+                    sh """
                         set -e
 
                         rm -rf gitops-repo
 
                         echo "Cloning repository..."
-
-                        git clone https://${GIT_USER}:${GIT_PASS}@github.com/puttamoses/car-project-microservices.git gitops-repo
+                        git clone https://\${GIT_USER}:\${GIT_PASS}@github.com/puttamoses/car-project-microservices.git gitops-repo
 
                         cd gitops-repo
 
                         git config user.email "jenkins-ci@autoelite.com"
+                        git config user.name  "Jenkins CI"
 
-                        git config user.name "Jenkins CI"
-
-                        echo "Current image:"
+                        echo "Current image in YAML:"
                         grep "image:" ${DEPLOY_FILE}
 
                         echo "Updating deployment YAML..."
 
-                        sed -i "/image:/c\\        image: ${IMAGE_URI}" ${DEPLOY_FILE}
+                        # ── BUG 2 FIX: use | as delimiter (ECR URIs contain /)
+                        #               match car-backend specifically to be safe ──
+                        sed -i "s|image:.*car-backend.*|image: ${env.IMAGE_URI}|g" ${DEPLOY_FILE}
 
-                        echo "Updated image:"
+                        echo "Updated image in YAML:"
                         grep "image:" ${DEPLOY_FILE}
 
                         git add ${DEPLOY_FILE}
 
-                        if git diff --cached --quiet
-                        then
-                            echo "No changes detected."
+                        if git diff --cached --quiet; then
+                            echo "⚠️  No changes detected — image tag may already be up to date"
                         else
-                            git commit -m "cd: update car-backend image to ${IMAGE_URI} [build ${BUILD_NUMBER}]"
-
+                            git commit -m "cd: update car-backend image to ${env.IMAGE_URI} [build ${env.BUILD_NUMBER}]"
                             git push origin ${GITHUB_BRANCH}
-
-                            echo "✅ Changes pushed successfully"
+                            echo "✅ Changes pushed — ArgoCD will sync automatically"
                         fi
-
-                        echo "✅ ArgoCD will sync automatically"
-                    '''
+                    """
                 }
             }
         }
     }
 
     post {
-
         success {
-            echo "✅ CD complete — ArgoCD will deploy ${IMAGE_URI}"
+            echo "✅ CD complete — ArgoCD will deploy: ${env.IMAGE_URI}"
         }
-
         failure {
-            echo "❌ CD failed — YAML not updated"
+            echo '❌ CD failed — YAML was not updated'
         }
-
         always {
             sh 'rm -rf gitops-repo || true'
-
             cleanWs()
         }
     }
