@@ -31,8 +31,6 @@ pipeline {
     environment {
         // ✅ FIXED: removed hardcoded IP — SONAR_HOST_URL is injected
         //           by withSonarQubeEnv('SonarQube') at runtime.
-        //           Hardcoding here was the root cause of Stage 6
-        //           polling the wrong IP (13.200.38.79 vs 15.206.213.145)
         AWS_REGION        = 'ap-south-1'
         S3_BUCKET         = 'your-reports-bucket'
 
@@ -65,11 +63,6 @@ pipeline {
 
         // ─────────────────────────────────────────────────────
         // STAGE 2 — Build
-        //
-        // Writes REACT_APP_API_URL (backend ALB DNS) into
-        // .env.production before npm run build.
-        // React reads it at build time and bakes it into
-        // the JS bundle — this is how frontend calls backend.
         // ─────────────────────────────────────────────────────
         stage('Stage 2 | Build') {
             steps {
@@ -85,9 +78,6 @@ pipeline {
 
         // ─────────────────────────────────────────────────────
         // STAGE 3 — Test + Coverage
-        //
-        // Generates coverage/lcov.info → imported by SonarQube
-        // Generates coverage/junit.xml → Jenkins test chart
         // ─────────────────────────────────────────────────────
         stage('Stage 3 | Test & Coverage') {
             steps {
@@ -121,20 +111,6 @@ pipeline {
 
         // ─────────────────────────────────────────────────────
         // STAGE 4 — SCA (OWASP Dependency-Check)
-        //
-        // IMPORTANT: dependencyCheck() always runs from WORKSPACE.
-        // dir() does NOT change its working directory.
-        // All paths must be relative to WORKSPACE.
-        //
-        // --scan car-frontend        → scans car-frontend folder
-        // --out  car-frontend/dep..  → saves reports there
-        //
-        // mkdir -p MUST be before dependencyCheck() call.
-        //
-        // ✅ One-time Jenkins setup:
-        //    Manage Jenkins → Global Tool Configuration
-        //    → Dependency-Check → Add → Name: OWASP-DC
-        //    → Install automatically ✅ → Save
         // ─────────────────────────────────────────────────────
         stage('Stage 4 | SCA — OWASP Dependency-Check') {
             steps {
@@ -170,9 +146,6 @@ pipeline {
 
         // ─────────────────────────────────────────────────────
         // STAGE 5 — SAST (SonarQube)
-        //
-        // sonar-scanner runs from car-frontend/ (cd first).
-        // withSonarQubeEnv injects SONAR_HOST_URL + SONAR_TOKEN.
         // ─────────────────────────────────────────────────────
         stage('Stage 5 | SAST — SonarQube Scan') {
             steps {
@@ -198,11 +171,6 @@ pipeline {
 
         // ─────────────────────────────────────────────────────
         // STAGE 6 — Quality Gate HARD STOP
-        //
-        // ✅ withSonarQubeEnv wraps this stage so SONAR_HOST_URL
-        //    is in scope (same server Stage 5 used).
-        // ✅ writeFile avoids single-quote injection into jq.
-        // ✅ CANCELLED spelled with double-L (SonarQube API value).
         // ─────────────────────────────────────────────────────
         stage('Stage 6 | Quality Gate — HARD STOP') {
             steps {
@@ -339,64 +307,67 @@ Dashboard: ${SONAR_HOST_URL}/dashboard?id=car-frontend
         // STAGE 9 — Smoke Test
         // ─────────────────────────────────────────────────────
         stage('Stage 9 | Smoke Test') {
-    steps {
-        script {
-            sh """
-                set -e
+            steps {
+                script {
+                    sh """
+                        set -e
 
-                echo "Cleaning old containers on port 9090..."
-                docker ps -q --filter "publish=9090" | xargs -r docker rm -f || true
+                        echo "Cleaning old containers on port 9090..."
+                        docker ps -q --filter "publish=9090" | xargs -r docker rm -f || true
 
-                docker run -d \
-                    --name frontend-smoke-${BUILD_NUMBER} \
-                    -p 9090:80 \
-                    ${env.IMAGE_URI}
+                        docker run -d \
+                            --name frontend-smoke-${BUILD_NUMBER} \
+                            -p 9090:80 \
+                            ${env.IMAGE_URI}
 
-                sleep 10
+                        sleep 10
 
-                STATUS=\$(curl -o /dev/null -sw "%{http_code}" http://localhost:9090/)
-                [ "\$STATUS" = "200" ] && echo "Root OK" || exit 1
+                        STATUS=\$(curl -o /dev/null -sw "%{http_code}" http://localhost:9090/)
+                        [ "\$STATUS" = "200" ] && echo "Root OK" || exit 1
 
-                curl -sf http://localhost:9090/ | grep -q "root" \
-                    && echo "React app served" || exit 1
+                        curl -sf http://localhost:9090/ | grep -q 'id="root"' \
+                            && echo "React app served" || exit 1
 
-                STATUS=\$(curl -o /dev/null -sw "%{http_code}" http://localhost:9090/cars)
-                [ "\$STATUS" = "200" ] && echo "React Router OK" || exit 1
+                        STATUS=\$(curl -o /dev/null -sw "%{http_code}" http://localhost:9090/cars)
+                        [ "\$STATUS" = "200" ] && echo "React Router OK" || exit 1
 
-                echo "✅ Smoke test passed"
-            """
+                        echo "✅ Smoke test passed"
+                    """
+                }
+            }
+            post {
+                always {
+                    sh "docker rm -f frontend-smoke-${BUILD_NUMBER} || true"
+                }
+            }
         }
-    }
-    post {
-        always {
-            sh "docker rm -f frontend-smoke-${BUILD_NUMBER} || true"
-        }
-    }
-}
+
         // ─────────────────────────────────────────────────────
         // STAGE 10 — Push to ECR
+        // FIX: switched single-quotes to double-quotes so Groovy
+        //      interpolates env.ECR_REGISTRY and env.IMAGE_URI
         // ─────────────────────────────────────────────────────
         stage('Stage 10 | Push to ECR') {
             steps {
                 script {
-                    sh '''
-                        aws ecr get-login-password --region $AWS_REGION | \
+                    sh """
+                        aws ecr get-login-password --region ${AWS_REGION} | \
                             docker login \
                                 --username AWS \
                                 --password-stdin \
-                                $ECR_REGISTRY
+                                ${env.ECR_REGISTRY}
 
                         docker tag \
-                            $IMAGE_URI \
-                            $ECR_REGISTRY/$ECR_REPOSITORY:latest
+                            ${env.IMAGE_URI} \
+                            ${env.ECR_REGISTRY}/${ECR_REPOSITORY}:latest
 
-                        docker push $IMAGE_URI
+                        docker push ${env.IMAGE_URI}
 
                         docker push \
-                            $ECR_REGISTRY/$ECR_REPOSITORY:latest
+                            ${env.ECR_REGISTRY}/${ECR_REPOSITORY}:latest
 
-                        echo $IMAGE_URI > /tmp/frontend_image_uri.txt
-                    '''
+                        echo ${env.IMAGE_URI} > /tmp/frontend_image_uri.txt
+                    """
                 }
             }
         }
@@ -429,41 +400,43 @@ Dashboard: ${SONAR_HOST_URL}/dashboard?id=car-frontend
             }
         }
 
-    }
+    } // end stages
 
     post {
 
-    success {
-        script {
+        success {
+            script {
+                def imageUri = sh(
+                    script: 'cat /tmp/frontend_image_uri.txt',
+                    returnStdout: true
+                ).trim()
 
-            def imageUri = sh(
-                script: 'cat /tmp/frontend_image_uri.txt',
-                returnStdout: true
-            ).trim()
+                echo "✅ CI passed — triggering CD with: ${imageUri}"
 
-            echo "✅ CI passed — triggering CD with: ${imageUri}"
-
-            build(
-                job: 'car-frontend-cd',
-                wait: false,
-                propagate: false,
-                parameters: [
-                    string(
-                        name: 'IMAGE_URI',
-                        value: imageUri
-                    )
-                ]
-            )
+                build(
+                    job: 'car-frontend-cd',
+                    wait: false,
+                    propagate: false,
+                    parameters: [
+                        string(
+                            name: 'IMAGE_URI',
+                            value: imageUri
+                        )
+                    ]
+                )
+            }
         }
-    }
 
-    failure {
-        echo '❌ CI failed — CD will NOT be triggered'
-    }
+        failure {
+            echo '❌ CI failed — CD will NOT be triggered'
+        }
 
-    always {
-        sh 'docker image prune -f || true'
-        sh 'rm -f /tmp/frontend_image_uri.txt trivy-report.json || true'
-        cleanWs()
-    }
-}
+        always {
+            sh 'docker image prune -f || true'
+            sh 'rm -f /tmp/frontend_image_uri.txt trivy-report.json || true'
+            cleanWs()
+        }
+
+    } // end post
+
+} // end pipeline
