@@ -22,7 +22,7 @@ spec:
           # Using AWS ECR (Elastic Container Registry)
           # Format: <account-id>.dkr.ecr.<region>.amazonaws.com/<repo>:<tag>
           # ✅ Change to your ECR image URI
-          image: YOUR_AWS_ACCOUNT_ID.dkr.ecr.YOUR_REGION.amazonaws.com/car-backend:latest
+          image: 339918905923.dkr.ecr.ap-south-1.amazonaws.com/car-backend:17-de4fea7
 
           imagePullPolicy: Always
           ports:
