@@ -1,39 +1,34 @@
 // ─────────────────────────────────────────────────────────────
 //  car-backend — CD Pipeline (GitOps)
 //
-//  Triggered by: CI pipeline post { success }
-//  Input:        IMAGE_URI from CI
-//
-//  Flow:
-//    1. Clone GitHub repo
-//    2. Update Kubernetes deployment YAML
-//    3. Commit + Push changes
-//    4. ArgoCD auto-syncs to EKS
+//  Triggered from CI pipeline
+//  Updates Kubernetes deployment YAML
+//  Pushes changes to GitHub
+//  ArgoCD auto-syncs to EKS
 // ─────────────────────────────────────────────────────────────
 
 pipeline {
 
     agent any
 
-    parameters {
-        string(
-            name: 'IMAGE_URI',
-            defaultValue: '',
-            description: 'Full ECR image URI from CI pipeline'
-        )
-    }
-
     environment {
-        IMAGE_URI     = "${params.IMAGE_URI}"
+
+        IMAGE_URI     = "${IMAGE_URI}"
+
         GITHUB_REPO   = 'https://github.com/puttamoses/car-project-microservices.git'
+
         GITHUB_BRANCH = 'main'
+
         DEPLOY_FILE   = 'k8s/backend-deployment.yaml'
     }
 
     options {
         timestamps()
+
         timeout(time: 10, unit: 'MINUTES')
+
         buildDiscarder(logRotator(numToKeepStr: '10'))
+
         disableConcurrentBuilds()
     }
 
@@ -63,6 +58,7 @@ pipeline {
                         cd gitops-repo
 
                         git config user.email "jenkins-ci@autoelite.com"
+
                         git config user.name "Jenkins CI"
 
                         echo "Current image:"
@@ -107,6 +103,7 @@ pipeline {
 
         always {
             sh 'rm -rf gitops-repo || true'
+
             cleanWs()
         }
     }
