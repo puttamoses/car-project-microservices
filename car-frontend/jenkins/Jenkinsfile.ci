@@ -365,9 +365,11 @@ Dashboard: ${SONAR_HOST_URL}/dashboard?id=car-frontend
 
                         docker push \
                             ${env.ECR_REGISTRY}/${ECR_REPOSITORY}:latest
-
-                        echo ${env.IMAGE_URI} > /tmp/frontend_image_uri.txt
                     """
+                    // ✅ FIX: store in env var — temp file is deleted by
+                    //    cleanWs() in post { always } before post { success }
+                    //    runs (post conditions execute alphabetically).
+                    env.PUBLISHED_IMAGE_URI = env.IMAGE_URI
                 }
             }
         }
@@ -406,12 +408,7 @@ Dashboard: ${SONAR_HOST_URL}/dashboard?id=car-frontend
 
         success {
             script {
-                def imageUri = sh(
-                    script: 'cat /tmp/frontend_image_uri.txt',
-                    returnStdout: true
-                ).trim()
-
-                echo "✅ CI passed — triggering CD with: ${imageUri}"
+                echo "✅ CI passed — triggering CD with: ${env.PUBLISHED_IMAGE_URI}"
 
                 build(
                     job: 'car-frontend-cd',
@@ -420,7 +417,7 @@ Dashboard: ${SONAR_HOST_URL}/dashboard?id=car-frontend
                     parameters: [
                         string(
                             name: 'IMAGE_URI',
-                            value: imageUri
+                            value: env.PUBLISHED_IMAGE_URI
                         )
                     ]
                 )
@@ -433,7 +430,7 @@ Dashboard: ${SONAR_HOST_URL}/dashboard?id=car-frontend
 
         always {
             sh 'docker image prune -f || true'
-            sh 'rm -f /tmp/frontend_image_uri.txt trivy-report.json || true'
+            sh 'rm -f trivy-report.json || true'
             cleanWs()
         }
 
