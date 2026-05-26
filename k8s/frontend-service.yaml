@@ -1,14 +1,40 @@
-# k8s/frontend-service.yaml
-apiVersion: v1
-kind: Service
+# k8s/ingress.yaml
+# AWS ALB Ingress — single entry point for all external traffic.
+#
+# After applying, get the ALB DNS:
+#   kubectl get ingress -n autoelite
+#   Copy ADDRESS (e.g. xxxxx.ap-south-1.elb.amazonaws.com)
+#
+# For production: point your domain CNAME → ADDRESS
+# For testing:    hit the ADDRESS directly in the browser
+#
+# Prerequisites — AWS Load Balancer Controller must be installed:
+#   https://docs.aws.amazon.com/eks/latest/userguide/aws-load-balancer-controller.html
+apiVersion: networking.k8s.io/v1
+kind: Ingress
 metadata:
-  name: car-frontend
+  name: autoelite-ingress
   namespace: autoelite
+  annotations:
+    alb.ingress.kubernetes.io/scheme: internet-facing
+    alb.ingress.kubernetes.io/target-type: ip
+    alb.ingress.kubernetes.io/region: ap-south-1
+    # Optional: HTTPS — uncomment and add your ACM certificate ARN
+    # alb.ingress.kubernetes.io/certificate-arn: arn:aws:acm:ap-south-1:ACCOUNT_ID:certificate/CERT_ID
+    # alb.ingress.kubernetes.io/listen-ports: '[{"HTTP":80},{"HTTPS":443}]'
+    # alb.ingress.kubernetes.io/ssl-redirect: "443"
 spec:
-  selector:
-    app: car-frontend
-  type: ClusterIP          # ← was LoadBalancer; Ingress handles external traffic
-  ports:
-    - port: 80
-      targetPort: 80
-      protocol: TCP
+  ingressClassName: alb
+  rules:
+    # FIX: removed host — no domain yet; ALB matches all traffic by DNS.
+    # Once you have a domain, restore:
+    #   - host: yourdomain.com
+    - http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: car-frontend
+                port:
+                  number: 80
