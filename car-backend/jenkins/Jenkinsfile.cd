@@ -4,15 +4,11 @@
 //  Triggered by: CI pipeline post { success }
 //  Input:        IMAGE_URI from CI
 //
-//  How it works:
-//    1. Clones GitHub repo
-//    2. Updates image in k8s/backend-deployment.yaml
-//    3. Commits and pushes to GitHub
-//    4. ArgoCD detects the change → syncs to EKS automatically
-//
-//  ✅ Jenkins Setup Required:
-//    Manage Jenkins → Credentials
-//      → github-creds  Username+Password (PAT as password)
+//  Flow:
+//    1. Clone GitHub repo
+//    2. Update Kubernetes deployment YAML
+//    3. Commit + Push changes
+//    4. ArgoCD auto-syncs to EKS
 // ─────────────────────────────────────────────────────────────
 
 pipeline {
@@ -21,9 +17,9 @@ pipeline {
 
     parameters {
         string(
-            name        : 'IMAGE_URI',
+            name: 'IMAGE_URI',
             defaultValue: '',
-            description : 'Full ECR image URI passed from CI pipeline'
+            description: 'Full ECR image URI from CI pipeline'
         )
     }
 
@@ -44,51 +40,74 @@ pipeline {
     stages {
 
         stage('Stage 1 | Update K8s YAML & Push to GitHub') {
+
             steps {
-                withCredentials([usernamePassword(
-                    credentialsId   : 'github-creds',
-                    usernameVariable: 'GIT_USER',
-                    passwordVariable: 'GIT_PASS'
-                )]) {
+
+                withCredentials([
+                    usernamePassword(
+                        credentialsId: 'github-creds',
+                        usernameVariable: 'GIT_USER',
+                        passwordVariable: 'GIT_PASS'
+                    )
+                ]) {
+
                     sh '''
+                        set -e
+
                         rm -rf gitops-repo
+
+                        echo "Cloning repository..."
+
                         git clone https://${GIT_USER}:${GIT_PASS}@github.com/puttamoses/car-project-microservices.git gitops-repo
+
                         cd gitops-repo
 
                         git config user.email "jenkins-ci@autoelite.com"
-                        git config user.name  "Jenkins CI"
+                        git config user.name "Jenkins CI"
 
                         echo "Current image:"
                         grep "image:" ${DEPLOY_FILE}
 
-                        sed -i "s|image:.*car-backend.*|image: ${IMAGE_URI}|g" ${DEPLOY_FILE}
+                        echo "Updating deployment YAML..."
+
+                        sed -i "/image:/c\\        image: ${IMAGE_URI}" ${DEPLOY_FILE}
 
                         echo "Updated image:"
                         grep "image:" ${DEPLOY_FILE}
 
                         git add ${DEPLOY_FILE}
-                        git commit -m "cd: update car-backend image to ${IMAGE_URI} [build ${BUILD_NUMBER}]"
-                        git push origin ${GITHUB_BRANCH}
 
-                        echo "✅ Pushed — ArgoCD will sync automatically"
+                        if git diff --cached --quiet
+                        then
+                            echo "No changes detected."
+                        else
+                            git commit -m "cd: update car-backend image to ${IMAGE_URI} [build ${BUILD_NUMBER}]"
+
+                            git push origin ${GITHUB_BRANCH}
+
+                            echo "✅ Changes pushed successfully"
+                        fi
+
+                        echo "✅ ArgoCD will sync automatically"
                     '''
                 }
             }
         }
-
     }
 
     post {
+
         success {
             echo "✅ CD complete — ArgoCD will deploy ${IMAGE_URI}"
         }
+
         failure {
-            echo '❌ CD failed — YAML not updated'
+            echo "❌ CD failed — YAML not updated"
         }
+
         always {
             sh 'rm -rf gitops-repo || true'
             cleanWs()
         }
     }
-
 }
