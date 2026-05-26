@@ -4,16 +4,10 @@ kind: Service
 metadata:
   name: car-frontend
   namespace: autoelite
-  annotations:
-    service.beta.kubernetes.io/aws-load-balancer-type: "external"
-    service.beta.kubernetes.io/aws-load-balancer-scheme: "internet-facing"
-    # FIX: was nlb-target-type (NLB annotation) — caused perpetual
-    #      EnsuringLoadBalancer loop and <pending> EXTERNAL-IP
-    service.beta.kubernetes.io/aws-load-balancer-target-type: "ip"
 spec:
   selector:
     app: car-frontend
-  type: LoadBalancer
+  type: ClusterIP          # ← was LoadBalancer; Ingress handles external traffic
   ports:
     - port: 80
       targetPort: 80
