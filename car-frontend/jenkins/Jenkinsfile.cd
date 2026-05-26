@@ -1,18 +1,26 @@
 // ─────────────────────────────────────────────────────────────
 //  car-frontend — CD Pipeline (GitOps)
 //
-//  Triggered by: CI pipeline post { success }
-//  Input:        IMAGE_URI from CI
+//  Triggered by : car-frontend CI → post { success }
 //
-//  How it works:
-//    1. Clones GitHub repo
-//    2. Updates image in k8s/frontend-deployment.yaml
-//    3. Commits and pushes to GitHub
-//    4. ArgoCD detects the change → syncs to EKS automatically
+//  CI hands off IMAGE_URI like this:
+//    Stage 7  → env.IMAGE_URI = <account>.dkr.ecr.<region>.amazonaws.com/car-frontend:<build>-<hash>
+//    Stage 10 → echo $IMAGE_URI > /tmp/frontend_image_uri.txt
+//    post     → build job: 'car-frontend-cd',
+//                   parameters: [string(name: 'IMAGE_URI', value: imageUri)]
 //
-//  ✅ Jenkins Setup Required:
-//    Manage Jenkins → Credentials
-//      → github-creds  Username+Password (PAT as password)
+//  CD receives IMAGE_URI via parameters{} and:
+//    Stage 0  → validates IMAGE_URI is not empty
+//    Stage 1  → clones GitOps repo
+//             → updates k8s/frontend-deployment.yaml
+//             → commits & pushes to GitHub
+//    ArgoCD   → detects push → syncs to EKS automatically
+//
+//  ✅ Jenkins credentials required:
+//    github-creds → Username + PAT (as password)
+//
+//  ✅ This job name must exactly match CI trigger:
+//    build job: 'car-frontend-cd'
 // ─────────────────────────────────────────────────────────────
 
 pipeline {
@@ -23,13 +31,12 @@ pipeline {
         string(
             name        : 'IMAGE_URI',
             defaultValue: '',
-            description : 'Full ECR image URI passed from CI pipeline'
+            description : 'Full ECR URI injected by car-frontend CI'
         )
     }
 
     environment {
         IMAGE_URI     = "${params.IMAGE_URI}"
-        GITHUB_REPO   = 'https://github.com/puttamoses/car-project-microservices.git'
         GITHUB_BRANCH = 'main'
         DEPLOY_FILE   = 'k8s/frontend-deployment.yaml'
     }
@@ -43,52 +50,92 @@ pipeline {
 
     stages {
 
+        // ─────────────────────────────────────────────────────
+        // STAGE 0 — Validate
+        // ─────────────────────────────────────────────────────
+        stage('Stage 0 | Validate Input') {
+            steps {
+                script {
+                    if (!env.IMAGE_URI?.trim()) {
+                        error("""
+IMAGE_URI is empty.
+This job must be triggered by car-frontend CI post { success }.
+
+Check:
+  1. Did CI Stage 10 (Push to ECR) succeed?
+  2. Does /tmp/frontend_image_uri.txt exist on CI agent?
+  3. Is this job name exactly 'car-frontend-cd'?
+                        """)
+                    }
+
+                    echo "📦 Image received from CI : ${env.IMAGE_URI}"
+                    echo "📁 File to update         : ${env.DEPLOY_FILE}"
+                    echo "🌿 Target branch          : ${env.GITHUB_BRANCH}"
+                }
+            }
+        }
+
+        // ─────────────────────────────────────────────────────
+        // STAGE 1 — Update K8s YAML & Push to GitHub
+        // ─────────────────────────────────────────────────────
         stage('Stage 1 | Update K8s YAML & Push to GitHub') {
             steps {
-                withCredentials([usernamePassword(
-                    credentialsId   : 'github-creds',
-                    usernameVariable: 'GIT_USER',
-                    passwordVariable: 'GIT_PASS'
-                )]) {
-                    sh '''
+                withCredentials([
+                    usernamePassword(
+                        credentialsId   : 'github-creds',
+                        usernameVariable: 'GIT_USER',
+                        passwordVariable: 'GIT_PASS'
+                    )
+                ]) {
+                    sh """
+                        set -e
+
                         rm -rf gitops-repo
-                        git clone https://${GIT_USER}:${GIT_PASS}@github.com/puttamoses/car-project-microservices.git gitops-repo
+
+                        echo "Cloning GitOps repository..."
+                        git clone https://\${GIT_USER}:\${GIT_PASS}@github.com/puttamoses/car-project-microservices.git gitops-repo
+
                         cd gitops-repo
 
                         git config user.email "jenkins-ci@autoelite.com"
                         git config user.name  "Jenkins CI"
 
-                        echo "Current image:"
-                        grep "image:" ${DEPLOY_FILE}
+                        echo "Current image in YAML:"
+                        grep "image:" ${env.DEPLOY_FILE}
 
-                        sed -i "s|image:.*car-frontend.*|image: ${IMAGE_URI}|g" ${DEPLOY_FILE}
+                        sed -i "s|image:.*car-frontend.*|image: ${env.IMAGE_URI}|g" ${env.DEPLOY_FILE}
 
-                        echo "Updated image:"
-                        grep "image:" ${DEPLOY_FILE}
+                        echo "Updated image in YAML:"
+                        grep "image:" ${env.DEPLOY_FILE}
 
-                        git add ${DEPLOY_FILE}
-                        git commit -m "cd: update car-frontend image to ${IMAGE_URI} [build ${BUILD_NUMBER}]"
-                        git push origin ${GITHUB_BRANCH}
+                        git add ${env.DEPLOY_FILE}
 
-                        echo "✅ Pushed — ArgoCD will sync automatically"
-                    '''
+                        if git diff --cached --quiet; then
+                            echo "⚠️ No changes — image tag already up to date in YAML"
+                        else
+                            git commit -m "cd: update car-frontend image to ${env.IMAGE_URI} [ci-build-${env.BUILD_NUMBER}]"
+                            git push origin ${env.GITHUB_BRANCH}
+
+                            echo "✅ Pushed to GitHub — ArgoCD will sync automatically"
+                        fi
+                    """
                 }
             }
         }
-
     }
 
     post {
         success {
-            echo "✅ CD complete — ArgoCD will deploy ${IMAGE_URI}"
+            echo "✅ CD complete — ArgoCD is deploying: ${env.IMAGE_URI}"
         }
+
         failure {
-            echo '❌ CD failed — YAML not updated'
+            echo "❌ CD failed — k8s/frontend-deployment.yaml was not updated"
         }
+
         always {
             sh 'rm -rf gitops-repo || true'
             cleanWs()
         }
     }
-
 }
